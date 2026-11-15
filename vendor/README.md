@@ -1,7 +1,8 @@
 # Vendored libraries
 
 Plugin frames load no npm packages and have no network, so the one library API Spec Viewer uses
-is copied here as a readable, unminified ES module. Its code is not patched.
+is copied here as a readable, unminified ES module. Its code is not changed; the one fix-up
+after bundling below only writes three characters as escapes.
 
 | File            | Library                                    | Version | Licence |
 | --------------- | ------------------------------------------ | ------- | ------- |

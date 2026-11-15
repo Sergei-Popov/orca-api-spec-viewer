@@ -323,7 +323,7 @@ const en = {
     'empty-list': 'Needs at least {min} item.',
     'bad-key': '{kind}',
     'unresolved-ref': 'The reference {ref} does not resolve.',
-    'external-ref': '{count} references point into {file}, which is not loaded.',
+    'external-ref': 'References into {file}, which is not loaded: {count}.',
     'circular-ref': 'The reference {ref} leads back to itself.',
     'ref-siblings': 'Fields next to $ref are ignored here: {fields}.',
     'duplicate-operation-id': 'operationId “{id}” is already used by {other}.',
