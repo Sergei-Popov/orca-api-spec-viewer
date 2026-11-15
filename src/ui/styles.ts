@@ -136,7 +136,14 @@ mark { background: color-mix(in srgb, #f5c400 40%, transparent); color: inherit;
 .nrow .chev.open { transform: rotate(90deg); }
 .nrow .chev.none { visibility: hidden; }
 .nrow .lbl { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
-.nrow .det { color: var(--muted-fg); overflow: hidden; text-overflow: ellipsis; flex: 1 1 0; min-width: 0; font-size: 12px; }
+/* Label and detail: the detail gets the room left, but never less than 5em; with less it wraps to
+   the second line, which the row-high box clips. */
+.nrow .txt {
+  display: flex; flex-wrap: wrap; align-content: flex-start; column-gap: 6px; flex: 1 1 0; min-width: 0;
+  height: var(--row); overflow: hidden;
+}
+.nrow .txt > span { line-height: var(--row); white-space: nowrap; }
+.nrow .det { color: var(--muted-fg); overflow: hidden; text-overflow: ellipsis; flex: 1 1 0; min-width: 5em; font-size: 12px; }
 .nrow .cnt { color: var(--muted-fg); font-size: 11px; flex: none; }
 .nrow.section { font-weight: 600; font-size: 11.5px; letter-spacing: .02em; text-transform: uppercase; color: var(--muted-fg); }
 .nrow.section .lbl { color: var(--muted-fg); }

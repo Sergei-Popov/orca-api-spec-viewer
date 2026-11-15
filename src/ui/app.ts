@@ -623,8 +623,11 @@ export class App {
       if (label.startsWith('/')) el.classList.add('mono')
       detail = undefined
     }
-    el.append(h('span', { className: 'lbl' }, this.filter ? highlight(label, this.filter) : label))
-    if (detail && node.kind === 'item' && !isOperation) el.append(h('span', { className: 'det' }, detail))
+    const lbl = h('span', { className: 'lbl' }, this.filter ? highlight(label, this.filter) : label)
+    // A detail with too little room for a few characters wraps onto a clipped line, so it is gone
+    // rather than cut to a letter (`.nrow .txt`).
+    if (detail && node.kind === 'item' && !isOperation) el.append(h('span', { className: 'txt' }, lbl, h('span', { className: 'det' }, detail)))
+    else el.append(lbl)
     if (node.kind !== 'item' && node.count !== undefined) el.append(h('span', { className: 'cnt' }, String(node.count)))
     el.title = [node.label, node.detail].filter(Boolean).join('\n')
     chev.addEventListener('click', (event) => {

@@ -61,3 +61,15 @@ test('the recursive link keeps its icon on the line with its name', () => {
   assert.match(rule('.tref'), /align-items: center/)
   assert.match(rule('.tref .icon'), /width: 13px; height: 13px/)
 })
+
+test('a sidebar detail with no room for a few letters is hidden, not cut to one', () => {
+  // Before: `.det` had min-width 0, so "Receive sensor readings" left room for "g." of its channel.
+  // Now label and detail share a wrapping, row-high box; a detail under 5em wraps out of sight.
+  const rule = (selector: string) => css.match(new RegExp(`^${selector.replace(/[.]/g, '\\.')} \\{([^}]*)\\}`, 'm'))?.[1] ?? ''
+  const box = rule('.nrow .txt')
+  assert.match(box, /flex-wrap: wrap/)
+  assert.match(box, /height: var\(--row\)/)
+  assert.match(box, /overflow: hidden/)
+  assert.match(rule('.nrow .txt > span'), /line-height: var\(--row\)/)
+  assert.match(rule('.nrow .det'), /min-width: 5em/)
+})
