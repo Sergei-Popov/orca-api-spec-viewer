@@ -1035,7 +1035,7 @@ export class App {
         if (file.size > 50 * 1024 * 1024) throw new Error(formatSize(file.size, this.host.locale))
         const text = await file.text()
         const parsed = parseText(text)
-        if (parsed.value === undefined || parsed.value === null) throw new Error(parsed.issues[0]?.message ?? 'empty')
+        if (parsed.value === undefined || parsed.value === null) throw new Error(parsed.issues[0]?.message || this.t.emptyFile)
         this.documents.set(file.name, parsed.value)
         loaded.push(file.name)
       } catch (error) {

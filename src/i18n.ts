@@ -196,6 +196,17 @@ const en = {
   linkTarget: 'Operation',
   callbackExpression: 'Expression',
   pathLevel: 'path',
+  pathLevelHint: 'Declared on the path item: it applies to every operation of the path.',
+  /** Words of the constraint chips under a schema: `length ≥ 3`, `items ≤ 10`, `unique`. */
+  constraintWords: { length: 'length', items: 'items', properties: 'properties', contains: 'contains', unique: 'unique' },
+  /** Phrases the checks name as what was expected (JSON type names stay as they are). */
+  expectedPhrases: {
+    'array of strings': 'array of strings',
+    'non-negative integer': 'non-negative integer',
+    'number > 0': 'number > 0',
+    'boolean or object': 'boolean or object'
+  } as Record<string, string>,
+  emptyFile: 'the file is empty',
   codeSamples: 'Code samples',
   samples: { curl: 'curl', fetch: 'JavaScript', python: 'Python', httpie: 'HTTPie' } as Record<string, string>,
   noNetwork: 'Requests are not sent from here: Orca keeps plugin views offline. Copy a sample and run it where you have access.',
@@ -554,6 +565,15 @@ const ru: Strings = {
   linkTarget: 'Операция',
   callbackExpression: 'Выражение',
   pathLevel: 'путь',
+  pathLevelHint: 'Объявлен в элементе пути: действует для всех операций этого пути.',
+  constraintWords: { length: 'длина', items: 'элементов', properties: 'свойств', contains: 'совпадений', unique: 'без повторов' },
+  expectedPhrases: {
+    'array of strings': 'массив строк',
+    'non-negative integer': 'неотрицательное целое число',
+    'number > 0': 'число больше 0',
+    'boolean or object': 'boolean или object'
+  },
+  emptyFile: 'файл пуст',
   codeSamples: 'Примеры кода',
   samples: { curl: 'curl', fetch: 'JavaScript', python: 'Python', httpie: 'HTTPie' },
   noNetwork: 'Запросы отсюда не отправляются: Orca не даёт представлениям плагинов доступа к сети. Скопируйте пример и выполните его там, где есть доступ.',
@@ -751,5 +771,6 @@ export function problemMessage(t: Strings, problem: Problem): string {
     return format(t.badKeys[kind] ?? t.badKeys.component, params)
   }
   if (problem.rule === 'invalid-enum' && params.type === 'unique') return format(t.duplicateEnum, params)
+  if (problem.rule === 'wrong-type') params.expected = t.expectedPhrases[String(params.expected)] ?? params.expected
   return format(t.messagesByRule[problem.rule] ?? problem.rule, params).trim()
 }

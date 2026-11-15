@@ -304,7 +304,7 @@ function paramTable(ctx: PageCtx, params: ParamView[], idBase: string): HTMLElem
     if (p.allowReserved) flags.push(h('span', { className: 'flag mono' }, ctx.t.allowReserved))
     if (p.allowEmptyValue) flags.push(h('span', { className: 'flag' }, ctx.t.allowEmpty))
     if (p.collectionFormat) flags.push(h('span', { className: 'flag mono' }, `collectionFormat: ${p.collectionFormat}`))
-    if (p.level === 'path') flags.push(h('span', { className: 'flag', title: 'Path item' }, ctx.t.pathLevel))
+    if (p.level === 'path') flags.push(h('span', { className: 'flag', title: ctx.t.pathLevelHint }, ctx.t.pathLevel))
     if (flags.length) nameCell.append(h('div', { className: 'pflags' }, ...flags))
     const cell = h('td', { className: 'pdesc' })
     if (p.stop) cell.append(stopNote(ctx, p.stop))

@@ -3,7 +3,7 @@
 // variants as tabs with the discriminator's mapping; a reference back to an ancestor shows as a
 // "Recursive" link instead of opening forever.
 
-import { format } from '../i18n'
+import { format, type Strings } from '../i18n'
 import { isObject, own, str } from '../spec/pointer'
 import { locKey, refOf, type Loc } from '../spec/refs'
 import { constraints, enumValues, formatValue, refName, schemaTypes, type Constraint } from '../spec/schema'
@@ -71,7 +71,7 @@ export function typeText(ctx: PageCtx, schema: unknown, loc: Loc, depth = 0): st
   return ''
 }
 
-function constraintText(c: Constraint): string {
+export function constraintText(c: Constraint, words: Strings['constraintWords']): string {
   switch (c.kind) {
     case 'minimum':
       return `≥ ${c.value}`
@@ -84,23 +84,23 @@ function constraintText(c: Constraint): string {
     case 'multipleOf':
       return `× ${c.value}`
     case 'minLength':
-      return `length ≥ ${c.value}`
+      return `${words.length} ≥ ${c.value}`
     case 'maxLength':
-      return `length ≤ ${c.value}`
+      return `${words.length} ≤ ${c.value}`
     case 'minItems':
-      return `items ≥ ${c.value}`
+      return `${words.items} ≥ ${c.value}`
     case 'maxItems':
-      return `items ≤ ${c.value}`
+      return `${words.items} ≤ ${c.value}`
     case 'minProperties':
-      return `properties ≥ ${c.value}`
+      return `${words.properties} ≥ ${c.value}`
     case 'maxProperties':
-      return `properties ≤ ${c.value}`
+      return `${words.properties} ≤ ${c.value}`
     case 'minContains':
-      return `contains ≥ ${c.value}`
+      return `${words.contains} ≥ ${c.value}`
     case 'maxContains':
-      return `contains ≤ ${c.value}`
+      return `${words.contains} ≤ ${c.value}`
     case 'uniqueItems':
-      return 'unique'
+      return words.unique
     case 'pattern':
       return `/${c.value}/`
     default:
@@ -222,7 +222,7 @@ function detailsOf(build: Build, schema: Record<string, unknown>, loc: Loc, opti
   const { ctx } = build
   const out: HTMLElement[] = []
   const cons = constraints(schema)
-  if (cons.length > 0) out.push(h('div', { className: 'tcons' }, ...cons.map((c) => h('span', { className: 'cons' }, constraintText(c)))))
+  if (cons.length > 0) out.push(h('div', { className: 'tcons' }, ...cons.map((c) => h('span', { className: 'cons' }, constraintText(c, ctx.t.constraintWords)))))
   if (!options.skipDescription) {
     const title = str(own(schema, 'title'))
     const desc = markdown(ctx, own(schema, 'description'))
