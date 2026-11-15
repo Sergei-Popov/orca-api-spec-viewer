@@ -17,6 +17,7 @@ import { buildSearchIndex, searchCounted, type SearchEntry, type SearchHit } fro
 import { banner, chip, methodBadge, type PageCtx } from './context'
 import { append, button, clickable, copyText, h, highlight, svg } from './dom'
 import { icons } from './icons'
+import { isHistoryArrow, searchKey } from './keys'
 import { componentPage, openApiOverview, operationPage, tagPage } from './openapi-pages'
 import { arazzoOverview, asyncComponentPage, asyncOperationPage, asyncOverview, channelPage, notSpecPage, overlayOverview, serverPage, workflowPage } from './other-pages'
 import { VirtualList } from './virtual'
@@ -113,12 +114,13 @@ export class App {
     this.fwdBtn = button('tool', svg(icons.forward), t.forward, () => this.forward())
     this.sideBtn = button('tool on', svg(icons.sidebar), t.toggleSidebar, () => this.toggleSidebar())
     this.titleEl = h('div', { className: 'title' })
-    this.searchBtn = clickable(h('div', { className: 'searchbox' }, svg(icons.search), h('span', null, t.search), h('span', { className: 'kbd' }, isMac() ? '⌘F' : 'Ctrl+F')), () => this.openSearch(), t.searchHint)
+    const key = searchKey(isMac())
+    this.searchBtn = clickable(h('div', { className: 'searchbox' }, svg(icons.search), h('span', null, t.search), h('span', { className: 'kbd' }, key)), () => this.openSearch(), format(t.searchHint, { key }))
     this.problemsBtn = button('tool', [svg(icons.ok)], t.problemsHint, () => this.togglePanel())
     this.sourceBtn = button('tool', [svg(icons.code)], t.sourceHint, () => (this.route.key === 'source' ? this.back() : this.go('source')))
     this.bar = h('div', { className: 'bar' }, this.sideBtn, this.backBtn, this.fwdBtn, this.titleEl, h('span', { className: 'spacer' }), this.searchBtn, this.problemsBtn, this.sourceBtn)
 
-    this.filterInput = h('input', { className: 'input', type: 'search', placeholder: t.filter, 'aria-label': t.filterHint, title: t.filterHint, spellcheck: 'false' })
+    this.filterInput = h('input', { className: 'input', type: 'search', placeholder: t.filter, 'aria-label': format(t.filterHint, { key }), title: format(t.filterHint, { key }), spellcheck: 'false' })
     this.filterInput.addEventListener('input', () => {
       this.filter = this.filterInput.value
       this.focusRow = -1
@@ -731,7 +733,7 @@ export class App {
       sevButton('info', t.infos(counts.info)),
       filter,
       h('span', { className: 'spacer' }),
-      this.analysis && this.analysis.dropped > 0 ? h('span', { className: 'sub' }, format(t.moreProblems, { n: this.analysis.dropped })) : null,
+      this.analysis && this.analysis.dropped > 0 ? h('span', { className: 'sub' }, t.moreProblems(this.analysis.dropped)) : null,
       button('tool', svg(icons.close), t.closePanel, () => this.togglePanel(false))
     )
     this.fillProblems()
@@ -960,7 +962,7 @@ export class App {
       this.openSearch()
       return
     }
-    if (event.altKey && !mod && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+    if (isHistoryArrow(event, mod)) {
       event.preventDefault()
       if (event.key === 'ArrowLeft') this.back()
       else this.forward()

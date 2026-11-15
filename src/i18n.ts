@@ -5,19 +5,20 @@ import type { Problem, RuleCode } from './lint/index'
 
 type Plural = (n: number) => string
 
+const pluralRules = { en: new Intl.PluralRules('en'), ru: new Intl.PluralRules('ru') }
+
+/** English plural forms, with the count written as in English (4,354). */
 const enPlural =
   (one: string, many: string): Plural =>
   (n) =>
-    `${n.toLocaleString('en')} ${n === 1 ? one : many}`
+    `${n.toLocaleString('en')} ${pluralRules.en.select(n) === 'one' ? one : many}`
 
-/** Russian plural forms: 1 ошибка, 2 ошибки, 5 ошибок, 21 ошибка. */
+/** Russian plural forms: 1 ошибка, 2 ошибки, 5 ошибок, 21 ошибка; the count as in Russian (4 354). */
 const ruPlural =
   (one: string, few: string, many: string): Plural =>
   (n) => {
-    const tens = n % 100
-    const ones = n % 10
-    const word = tens >= 11 && tens <= 14 ? many : ones === 1 ? one : ones >= 2 && ones <= 4 ? few : many
-    return `${n.toLocaleString('ru')} ${word}`
+    const form = pluralRules.ru.select(n)
+    return `${n.toLocaleString('ru')} ${form === 'one' ? one : form === 'few' ? few : many}`
   }
 
 type Messages = Record<RuleCode, string>
@@ -74,10 +75,10 @@ const en = {
   } as Record<string, string>,
 
   filter: 'Filter',
-  filterHint: 'Filter the list (⌘F searches everything)',
+  filterHint: 'Filter the list ({key} searches everything)',
   noMatches: 'Nothing matches “{q}”.',
   search: 'Search',
-  searchHint: 'Search (⌘F)',
+  searchHint: 'Search ({key})',
   searchPlaceholder: 'Search paths, operations, schemas and descriptions',
   searchKeys: '↑ ↓ move · Enter opens · Esc closes',
   searchEmpty: 'Type to search paths, operationIds, summaries, descriptions and schema names.',
@@ -107,7 +108,7 @@ const en = {
   errors: enPlural('error', 'errors'),
   warnings: enPlural('warning', 'warnings'),
   infos: enPlural('note', 'notes'),
-  moreProblems: '{n} more problems are not listed.',
+  moreProblems: (n: number) => `${enPlural('more problem is', 'more problems are')(n)} not listed.`,
   severity: { error: 'Error', warning: 'Warning', info: 'Note' } as Record<string, string>,
   filterProblems: 'Filter problems',
   closePanel: 'Close',
@@ -446,10 +447,10 @@ const ru: Strings = {
   },
 
   filter: 'Фильтр',
-  filterHint: 'Отфильтровать список (⌘F — поиск по всему)',
+  filterHint: 'Отфильтровать список ({key} — поиск по всему)',
   noMatches: 'Ничего не нашлось по «{q}».',
   search: 'Поиск',
-  searchHint: 'Поиск (⌘F)',
+  searchHint: 'Поиск ({key})',
   searchPlaceholder: 'Поиск по путям, операциям, схемам и описаниям',
   searchKeys: '↑ ↓ — выбор · Enter — открыть · Esc — закрыть',
   searchEmpty: 'Начните вводить: поиск идёт по путям, operationId, кратким и полным описаниям и именам схем.',
@@ -479,7 +480,7 @@ const ru: Strings = {
   errors: ruPlural('ошибка', 'ошибки', 'ошибок'),
   warnings: ruPlural('предупреждение', 'предупреждения', 'предупреждений'),
   infos: ruPlural('замечание', 'замечания', 'замечаний'),
-  moreProblems: 'Ещё {n} проблем не показаны.',
+  moreProblems: (n: number) => `Ещё ${ruPlural('проблема не показана', 'проблемы не показаны', 'проблем не показаны')(n)}.`,
   severity: { error: 'Ошибка', warning: 'Предупреждение', info: 'Замечание' },
   filterProblems: 'Фильтр проблем',
   closePanel: 'Закрыть',

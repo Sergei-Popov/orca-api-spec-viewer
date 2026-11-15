@@ -387,7 +387,7 @@ function itemNode(build: Build, item: Item, id: string, depth: number, ancestors
     const label = format(ctx.t.recursive, { name: r.ref ? refName(r.ref) : item.label })
     head.push(
       target
-        ? clickable(h('span', { className: 'tref', title: ctx.t.recursiveHint }, svg(icons.loop), ' ', label), () => ctx.go(target))
+        ? clickable(h('span', { className: 'tref', title: ctx.t.recursiveHint }, svg(icons.loop), label), () => ctx.go(target))
         : h('span', { className: 'sub', title: ctx.t.recursiveHint }, label)
     )
   }
