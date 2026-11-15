@@ -430,6 +430,24 @@ export function securitySchemes(model: OpenApiModel): Record<string, unknown> {
   return isObject(map) ? map : {}
 }
 
+export type SchemeLookup = { kind: 'local'; loc: Loc; value: unknown } | { kind: 'external'; file: string } | { kind: 'missing' }
+
+/**
+ * The scheme a security requirement names: a security scheme component of that name, or from
+ * OpenAPI 3.2 a scheme's URI (`#/components/securitySchemes/apiKey`, or one in another file).
+ */
+export function requirementScheme(model: OpenApiModel, refs: Refs, name: string): SchemeLookup {
+  const schemes = securitySchemes(model)
+  if (Object.prototype.hasOwnProperty.call(schemes, name)) {
+    return { kind: 'local', loc: { doc: '', path: [...(model.family === 'swagger2' ? ['securityDefinitions'] : ['components', 'securitySchemes']), name] }, value: schemes[name] }
+  }
+  if (model.family !== 'openapi32') return { kind: 'missing' }
+  const resolution = refs.resolve(name, '')
+  if (resolution.kind === 'local') return { kind: 'local', loc: resolution.loc, value: resolution.value }
+  if (resolution.kind === 'external') return { kind: 'external', file: resolution.file }
+  return { kind: 'missing' }
+}
+
 /** `/pets/{petId}/photos/{id}` → `['petId', 'id']`. */
 export function pathTemplateNames(route: string): string[] {
   const names: string[] = []

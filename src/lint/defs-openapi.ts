@@ -8,6 +8,8 @@ import type { FieldType, ObjectDef, WalkContext } from './walker'
 
 const ref = (obj: string): FieldType => ({ obj, ref: true })
 const obj = (name: string): FieldType => ({ obj: name })
+/** A Media Type Object, or from OpenAPI 3.2 a Reference Object to one. */
+const media = (): FieldType => ({ obj: 'MediaType', ref: 32 })
 const map = (type: FieldType, keys?: 'component'): FieldType => ({ map: type, keys })
 const list = (type: FieldType, min?: number): FieldType => ({ list: type, min })
 const oneOf = (...values: string[]): FieldType => ({ oneOf: values })
@@ -122,7 +124,7 @@ const parameterFields = {
   schema: 'schema',
   example: 'any',
   examples: map(ref('Example')),
-  content: map(obj('MediaType'))
+  content: map(media())
 } as const
 
 /** OpenAPI 3.0, 3.1 and 3.2 objects. */
@@ -239,7 +241,7 @@ export function openApi3Defs(): Record<string, ObjectDef> {
     },
     ExternalDocs: { fields: { description: 'string', url: 'string' }, required: ['url'] },
     Parameter: { fields: { ...parameterFields }, required: ['name', 'in'], check: checkParameter },
-    RequestBody: { fields: { description: 'string', content: map(obj('MediaType')), required: 'boolean' }, required: ['content'] },
+    RequestBody: { fields: { description: 'string', content: map(media()), required: 'boolean' }, required: ['content'] },
     MediaType: {
       fields: {
         schema: 'schema',
@@ -279,7 +281,7 @@ export function openApi3Defs(): Record<string, ObjectDef> {
         summary: ['string', 32],
         description: 'string',
         headers: map(ref('Header')),
-        content: map(obj('MediaType')),
+        content: map(media()),
         links: map(ref('Link'))
       },
       check: (value, path, ctx) => {
@@ -318,7 +320,7 @@ export function openApi3Defs(): Record<string, ObjectDef> {
         schema: 'schema',
         example: 'any',
         examples: map(ref('Example')),
-        content: map(obj('MediaType')),
+        content: map(media()),
         name: 'any',
         in: 'any'
       },

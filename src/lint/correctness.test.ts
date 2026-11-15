@@ -3,6 +3,8 @@
 import { assert, test } from 'orca/testing'
 import { analyze } from '../analyze'
 import type { OpenApiModel } from '../spec/openapi'
+import { operationDetails } from '../spec/operation'
+import { buildRequest } from '../spec/samples'
 
 const found = (text: string) => analyze(text).problems.map((p) => `${p.rule} ${p.path.join('/')}`)
 
@@ -135,4 +137,51 @@ components:
   assert.deepEqual(found(spec('petType')), [])
   assert.deepEqual(found(spec('{ propertyName: petType }')), ['wrong-type components/schemas/Pet/discriminator'])
   assert.deepEqual(found(spec('petType').replace('asyncapi: 3.0.0', 'asyncapi: 2.6.0').replace(/channels:[\s\S]*?components:/, 'channels: {}\ncomponents:')), [])
+})
+
+test('OpenAPI 3.2: a media type may be a reference', () => {
+  // Before: "Unknown field $ref in MediaType" and "Nothing refers to PetJson".
+  const spec = (version: string) => `openapi: ${version}
+info: { title: T, version: '1' }
+paths:
+  /pets:
+    get:
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json: { $ref: '#/components/mediaTypes/PetJson' }
+components:
+  mediaTypes:
+    PetJson: { schema: { type: object } }
+`
+  assert.deepEqual(found(spec('3.2.0')), [])
+  // Before 3.2 a content entry is a Media Type Object only.
+  assert.deepEqual(analyze(spec('3.1.1')).problems.map((p) => p.rule), ['unknown-field', 'not-in-version', 'unused-component'])
+})
+
+test('OpenAPI 3.2: a security requirement may name a scheme by its URI', () => {
+  // Before: both requirements were "not defined".
+  const spec = (version: string, names: string[]) => `openapi: ${version}
+info: { title: T, version: '1' }
+security:
+${names.map((n) => `  - '${n}': []`).join('\n')}
+paths:
+  /a: { get: { responses: { '200': { description: ok } } } }
+components:
+  securitySchemes:
+    apiKey: { type: apiKey, in: header, name: X-Key }
+`
+  const local = '#/components/securitySchemes/apiKey'
+  const other = 'https://example.com/shared.yaml#/components/securitySchemes/oauth'
+  assert.deepEqual(found(spec('3.2.0', [local, 'apiKey'])), [])
+  assert.deepEqual(analyze(spec('3.2.0', [other])).problems.map((p) => p.rule), ['external-ref'])
+  assert.deepEqual(found(spec('3.2.0', ['#/components/securitySchemes/nope'])), ['unknown-security-scheme security/0/#/components/securitySchemes/nope'])
+  // Before 3.2 a requirement names a component only.
+  assert.deepEqual(found(spec('3.1.1', [local])), [`unknown-security-scheme security/0/${local}`])
+  // The samples send the scheme the URI names.
+  const a = analyze(spec('3.2.0', [local]))
+  const model = (a.model as { model: OpenApiModel }).model
+  const request = buildRequest(model, a.refs, model.operations[0], operationDetails(model, a.refs, model.operations[0]))
+  assert.deepEqual(request.headers, [['X-Key', '<API_KEY>']])
 })

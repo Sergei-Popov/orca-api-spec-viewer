@@ -14,7 +14,7 @@ export type FieldType =
   | 'integer'
   | 'any'
   | 'schema'
-  | { obj: string; ref?: boolean }
+  | { obj: string; ref?: boolean | number }
   | { map: FieldType; keys?: 'component' }
   | { list: FieldType; min?: number }
   | { oneOf: readonly string[] }
@@ -162,7 +162,8 @@ function visitValue(value: unknown, type: FieldType, path: string[], ctx: WalkCo
     }
     return
   }
-  if (type.ref && typeof value.$ref === 'string') {
+  // `ref` is true, or the level from which a Reference Object may stand here.
+  if (type.ref && (type.ref === true || ctx.level >= type.ref) && typeof value.$ref === 'string') {
     ctx.refs.push({ ref: value.$ref, path: [...path, '$ref'] })
     const siblings = Object.keys(value).filter((k) => k !== '$ref' && !k.startsWith('x-'))
     // OpenAPI 3.1+ lets a Reference Object override `summary` and `description`.

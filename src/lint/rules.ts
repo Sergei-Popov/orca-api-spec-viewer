@@ -3,7 +3,7 @@
 
 import type { ArazzoModel } from '../spec/arazzo'
 import type { AsyncApiModel } from '../spec/asyncapi'
-import { componentsPath, pathTemplateNames, serverList, tagParentCycles, type OpenApiModel, type Operation } from '../spec/openapi'
+import { componentsPath, pathTemplateNames, requirementScheme, serverList, tagParentCycles, type OpenApiModel, type Operation } from '../spec/openapi'
 import { getAt, isObject, own, str, toPointer } from '../spec/pointer'
 import { locKey, MAX_HOPS, refOf, type Refs } from '../spec/refs'
 import type { WalkContext } from './walker'
@@ -215,15 +215,15 @@ export function checkOpenApi(ctx: WalkContext, refs: Refs, model: OpenApiModel):
     }
   }
 
-  // Security requirements name defined schemes.
-  const schemesMap = model.family === 'swagger2' ? own(model.root, 'securityDefinitions') : getAt(model.root, ['components', 'securitySchemes'])
-  const schemes = isObject(schemesMap) ? schemesMap : {}
+  // Security requirements name defined schemes (in 3.2, by name or by URI).
   const checkRequirements = (list: unknown, base: Path) => {
     if (!Array.isArray(list)) return
     list.forEach((req, index) => {
       if (!isObject(req)) return
       for (const name of Object.keys(req)) {
-        if (!Object.prototype.hasOwnProperty.call(schemes, name)) ctx.problems.error('unknown-security-scheme', [...base, String(index), name], { name })
+        const scheme = requirementScheme(model, refs, name)
+        if (scheme.kind === 'missing') ctx.problems.error('unknown-security-scheme', [...base, String(index), name], { name })
+        else if (scheme.kind === 'external') ctx.problems.info('external-ref', [...base, String(index), name], { file: scheme.file, count: 1 })
       }
     })
   }

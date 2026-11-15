@@ -4,7 +4,7 @@
 import { format } from '../i18n'
 import { familyLabel } from '../spec/detect'
 import { exampleFromSchema } from '../spec/example'
-import { operationServers, operationSecurity, securitySchemes, type OpenApiModel, type Operation, type ServerInfo, type TagNode } from '../spec/openapi'
+import { operationServers, operationSecurity, requirementScheme, securitySchemes, type OpenApiModel, type Operation, type ServerInfo, type TagNode } from '../spec/openapi'
 import { compareStatus, examplesOf, mediaList, operationDetails, paramView, type BodyView, type ExampleView, type HeaderView, type LinkView, type MediaView, type OperationDetails, type ParamView, type ResponseView } from '../spec/operation'
 import { getAt, isObject, own, str, toPointer } from '../spec/pointer'
 import type { Loc } from '../spec/refs'
@@ -270,16 +270,16 @@ export function tagPage(ctx: PageCtx, model: OpenApiModel, tag: TagNode): HTMLEl
 
 function securityLine(ctx: PageCtx, model: OpenApiModel, requirements: Record<string, unknown>[], inherited = false): HTMLElement {
   if (requirements.length === 0) return h('div', { className: 'meta' }, svg(icons.lock), ctx.t.noSecurity)
-  const base = model.family === 'swagger2' ? ['securityDefinitions'] : ['components', 'securitySchemes']
   const alternatives = requirements.map((req) => {
     const names = Object.keys(req)
     if (names.length === 0) return h('span', { className: 'sub' }, ctx.t.noSecurity)
     const parts: Child[] = []
     names.forEach((name, index) => {
       if (index > 0) parts.push(' + ')
-      const key = 'c:' + toPointer([...base, name])
+      const scheme = requirementScheme(model, ctx.refs, name)
+      const key = scheme.kind === 'local' ? 'c:' + toPointer(scheme.loc.path) : ''
       const scopes = Array.isArray(req[name]) ? (req[name] as unknown[]).filter((s): s is string => typeof s === 'string') : []
-      parts.push(ctx.titleOf(key) ? pageLink(ctx, key, name, 'link mono') : h('span', { className: 'mono' }, name))
+      parts.push(key && ctx.titleOf(key) ? pageLink(ctx, key, name, 'link mono') : h('span', { className: 'mono' }, name))
       if (scopes.length) parts.push(h('span', { className: 'sub mono' }, ` (${scopes.join(', ')})`))
     })
     return h('span', null, ...parts)

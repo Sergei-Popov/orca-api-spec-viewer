@@ -4,7 +4,7 @@
 import { exampleFromSchema } from './example'
 import { jsonText } from './json-text'
 import type { OpenApiModel, Operation } from './openapi'
-import { operationSecurity, operationServers, securitySchemes } from './openapi'
+import { operationSecurity, operationServers, requirementScheme } from './openapi'
 import { styledHeader, styledPairs, styledPath, type ParamStyle } from './param-style'
 import type { MediaView, OperationDetails, ParamView } from './operation'
 import { isObject, own, str } from './pointer'
@@ -96,11 +96,12 @@ export function buildRequest(model: OpenApiModel, refs: Refs, op: Operation, det
   }
 
   const security = operationSecurity(model, op)
-  const schemes = securitySchemes(model)
   const requirement = security?.requirements[0]
   if (requirement) {
     for (const name of Object.keys(requirement)) {
-      const followed = refs.follow(own(schemes, name), { doc: '', path: [] }).value
+      const found = requirementScheme(model, refs, name)
+      if (found.kind !== 'local') continue
+      const followed = refs.follow(found.value, found.loc).value
       if (!isObject(followed)) continue
       const type = str(own(followed, 'type'))
       const scheme = str(own(followed, 'scheme'))?.toLowerCase()
