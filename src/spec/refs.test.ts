@@ -251,3 +251,80 @@ test('a loaded file whose name has half of a UTF-16 pair still resolves', () => 
   const key = refs.addDocument('pet' + String.fromCharCode(0xd83d) + '.yaml', { Pet: { type: 'object' } })
   assert.equal(refs.resolve(key + '#/Pet').kind, 'local')
 })
+
+test('AsyncAPI: a message’s headers is a schema, so its $id, anchors and examples index as one', () => {
+  // Before: `headers` was read as a map of names: its $id and $anchor gave false external-ref
+  // notes, and a $id inside its examples data resolved to the example value.
+  const a = analyze(`asyncapi: 2.6.0
+info: { title: T, version: '1' }
+channels:
+  users:
+    subscribe:
+      message:
+        headers:
+          $id: https://example.com/headers
+          type: object
+          properties: { default: { $anchor: hdr-default, type: string } }
+          examples: [{ trace: { $id: https://example.com/fake } }]
+        payload:
+          type: object
+          properties:
+            all: { $ref: 'https://example.com/headers' }
+            one: { $ref: 'https://example.com/headers#hdr-default' }
+`)
+  assert.deepEqual(a.problems.map((p) => `${p.rule} ${p.path.join('/')}`), [])
+  assert.equal(a.refs.resolve('https://example.com/fake').kind, 'external')
+})
+
+test('draft-07 and older: a plain-name $id is an anchor of its resource', () => {
+  // Before: `$id: '#addr'` was taken as a new document URI, so `$ref: '#addr'` was unresolved.
+  const a = analyze(`asyncapi: 2.6.0
+info: { title: T, version: '1' }
+channels:
+  users:
+    subscribe:
+      message:
+        payload:
+          type: object
+          properties:
+            home: { $ref: '#addr' }
+            nick: { $ref: 'https://example.com/schemas/person#nick' }
+            person: { $ref: 'https://example.com/schemas/person' }
+components:
+  schemas:
+    Address: { $id: '#addr', type: object }
+    Person:
+      $id: https://example.com/schemas/person
+      type: object
+      properties: { nick: { $id: '#nick', type: string } }
+`)
+  assert.deepEqual(a.problems.map((p) => `${p.rule} ${p.path.join('/')}`), [])
+  const home = a.refs.resolve('#addr', '', false, ['channels', 'users', 'subscribe', 'message', 'payload', 'properties', 'home'])
+  assert.ok(home.kind === 'local' && home.loc.path.join('/') === 'components/schemas/Address')
+  const nick = a.refs.resolve('https://example.com/schemas/person#nick')
+  assert.ok(nick.kind === 'local' && nick.loc.path.join('/') === 'components/schemas/Person/properties/nick')
+})
+
+test('OpenAPI 3.1+: a $ref sibling enum or type narrows the target’s', () => {
+  // Before: `{ $ref: Status, enum: [available] }` showed both of Status's values as allowed.
+  const a = analyze(spec31({
+    Status: { type: ['string', 'null'], enum: ['available', 'sold', null] },
+    Count: { type: 'number' },
+    Pet: {
+      type: 'object',
+      properties: {
+        narrowed: { $ref: '#/components/schemas/Status', enum: ['available', 'gone'], type: 'string' },
+        disjoint: { $ref: '#/components/schemas/Status', enum: ['gone'] },
+        whole: { $ref: '#/components/schemas/Count', type: 'integer' }
+      }
+    }
+  }))
+  const pet = a.refs.follow({ $ref: '#/components/schemas/Pet' }, { doc: '', path: [] }).value as { properties: Record<string, unknown> }
+  const show = (name: string) => a.refs.follow(pet.properties[name], { doc: '', path: ['components', 'schemas', 'Pet', 'properties', name] }).value as Record<string, unknown>
+  assert.deepEqual(show('narrowed').enum, ['available'])
+  assert.equal(show('narrowed').type, 'string')
+  assert.deepEqual(show('disjoint').enum, ['available', 'sold', null])
+  assert.equal(show('whole').type, 'integer')
+  const example = exampleFromSchema(a.refs, pet.properties.narrowed, { doc: '', path: ['components', 'schemas', 'Pet', 'properties', 'narrowed'] }, { mode: 'response' })
+  assert.equal(example, 'available')
+})

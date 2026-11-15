@@ -10,6 +10,7 @@
 // the same way elsewhere is the last resort. A `$dynamicRef` takes the outermost resource of its
 // dynamic scope (carried in `Loc.scope`) that has the anchor.
 
+import { sameJson } from './json-text'
 import { fragmentToPath, getAt, isObject, toPointer } from './pointer'
 
 /** A place in one of the documents: '' is the open file, others are files loaded by hand. */
@@ -300,7 +301,10 @@ export class Refs {
     index = { base, self: base !== fallback, ids: new Map(), rawIds: new Map(), anchors: new Map(), anchorNames: new Map(), dynamicAnchors: new Map(), dynamicAnchorNames: new Map(), resources: new Map() }
     index.resources.set('', { path: [], base })
     this.indexes.set(doc, index)
-    buildIndex(root, index)
+    // AsyncAPI's `headers` is a schema; draft-07 and older name anchors with `$id: '#name'`.
+    const main = this.docs.get('')
+    const asyncapi = isObject(main) && typeof own(main, 'asyncapi') === 'string'
+    buildIndex(root, index, { names: asyncapi ? ASYNC_NAME_MAPS : NAME_MAPS, plainIdAnchors: !this.options.siblings })
     return index
   }
 }
@@ -337,9 +341,9 @@ function isSibling(key: string): boolean {
 
 /**
  * A reference's target with the reference's siblings applied: annotations replace the target's,
- * bounds take the stricter value, `required` lists are joined and `properties` added to; any
- * other keyword the target lacks is added (where both have one, both apply, and the target's is
- * shown).
+ * bounds take the stricter value, `enum` and `type` keep what both allow, `required` lists are
+ * joined and `properties` added to; any other keyword the target lacks is added (where both have
+ * one, such as `pattern`, both apply, and the target's is shown).
  */
 function mergeSiblings(target: unknown, referring: Record<string, unknown>, schema: boolean): unknown {
   if (!isObject(target)) return target
@@ -353,10 +357,32 @@ function mergeSiblings(target: unknown, referring: Record<string, unknown>, sche
     if (ANNOTATIONS.has(key) || !Object.prototype.hasOwnProperty.call(target, key)) out[key] = mine
     else if (typeof mine === 'number' && typeof theirs === 'number' && LOWER_BOUNDS.has(key)) out[key] = Math.max(mine, theirs)
     else if (typeof mine === 'number' && typeof theirs === 'number' && UPPER_BOUNDS.has(key)) out[key] = Math.min(mine, theirs)
+    else if (key === 'enum' && Array.isArray(mine) && Array.isArray(theirs)) out[key] = narrowEnum(theirs, mine)
+    else if (key === 'type' && typeList(mine) && typeList(theirs)) out[key] = narrowTypes(typeList(theirs)!, typeList(mine)!) ?? theirs
     else if (key === 'required' && Array.isArray(mine) && Array.isArray(theirs)) out[key] = [...new Set([...theirs, ...mine])]
     else if (key === 'properties' && isObject(mine) && isObject(theirs)) out[key] = { ...theirs, ...mine }
   }
   return out
+}
+
+/** The values both allow; when none is, the target's stay (nothing is valid, which is the document's to fix). */
+function narrowEnum(theirs: unknown[], mine: unknown[]): unknown[] {
+  const both = theirs.filter((value) => mine.some((other) => sameJson(value, other)))
+  return both.length > 0 ? both : theirs
+}
+
+function typeList(value: unknown): string[] | null {
+  if (typeof value === 'string') return [value]
+  return Array.isArray(value) && value.every((item) => typeof item === 'string') ? value : null
+}
+
+/** The types both allow (`integer` is a `number`); null when none is, so the target's stays. */
+function narrowTypes(theirs: string[], mine: string[]): string | string[] | null {
+  const allows = (list: string[], type: string) => list.includes(type) || (type === 'integer' && list.includes('number'))
+  const both = [...new Set([...theirs.filter((type) => allows(mine, type)), ...mine.filter((type) => allows(theirs, type))])]
+  if (both.length === 0) return null
+  const kept = both.includes('integer') ? both.filter((type) => type !== 'number' || (theirs.includes('number') && mine.includes('number'))) : both
+  return kept.length === 1 ? kept[0] : kept
 }
 
 /** The reference an object carries: `$ref`, or a schema's `$dynamicRef`. */
@@ -414,12 +440,16 @@ const NAME_MAPS = new Set([
   'messages',
   'operations'
 ])
+/** In AsyncAPI a message's `headers` is a schema, not a map of names. */
+const ASYNC_NAME_MAPS = new Set([...NAME_MAPS].filter((key) => key !== 'headers'))
+/** A draft-07 plain-name `$id`, which is an anchor of its resource. */
+const PLAIN_NAME_ID = /^#[A-Za-z][-A-Za-z0-9.:_]*$/
 
 /**
  * Walks a document once for `$id`, `$anchor` and `$dynamicAnchor`, skipping example data. Entries
  * link to their parent instead of carrying a path, so deep documents stay linear.
  */
-function buildIndex(root: unknown, index: DocIndex): void {
+function buildIndex(root: unknown, index: DocIndex, options: { names: ReadonlySet<string>; plainIdAnchors: boolean }): void {
   const seen = new WeakSet<object>()
   const stack: IndexEntry[] = [{ node: root, parent: null, key: '', depth: 0, base: index.base, names: false }]
   let steps = 0
@@ -438,7 +468,11 @@ function buildIndex(root: unknown, index: DocIndex): void {
     const pathHere = () => (path ??= entryPath(entry))
     if (!entry.names) {
       const id = own(obj, '$id')
-      if (typeof id === 'string' && id !== '') {
+      if (typeof id === 'string' && options.plainIdAnchors && PLAIN_NAME_ID.test(id)) {
+        const name = id.slice(1)
+        if (!index.anchors.has(`${base}#${name}`)) index.anchors.set(`${base}#${name}`, pathHere())
+        if (!index.anchorNames.has(name)) index.anchorNames.set(name, pathHere())
+      } else if (typeof id === 'string' && id !== '') {
         const clean = id.replace(/#$/, '')
         if (!index.rawIds.has(clean)) index.rawIds.set(clean, pathHere())
         const absolute = resolveUri(clean, base)
@@ -463,7 +497,7 @@ function buildIndex(root: unknown, index: DocIndex): void {
     for (let i = keys.length - 1; i >= 0; i--) {
       const key = keys[i]
       if (!entry.names && DATA_KEYWORDS.has(key)) continue
-      stack.push({ node: obj[key], parent: entry, key, depth: depth + 1, base: nextBase, names: !entry.names && NAME_MAPS.has(key) })
+      stack.push({ node: obj[key], parent: entry, key, depth: depth + 1, base: nextBase, names: !entry.names && options.names.has(key) })
     }
   }
 }
