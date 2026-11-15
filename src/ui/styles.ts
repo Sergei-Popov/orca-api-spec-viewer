@@ -99,7 +99,9 @@ mark { background: color-mix(in srgb, #f5c400 40%, transparent); color: inherit;
 .tool:disabled { opacity: .4; cursor: default; background: transparent; }
 .tool.on { background: var(--select); color: var(--fg); }
 .searchbox {
-  display: flex; align-items: center; gap: 8px; height: 28px; width: min(340px, 34vw); padding: 0 8px;
+  display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px;
+  /* Starts at 96px and takes the free room up to its cap, so the document's title never gives way to it. */
+  flex: 100 1 96px; min-width: 96px; max-width: min(340px, 34vw);
   border: 1px solid var(--input); border-radius: var(--radius); background: var(--bg); color: var(--muted-fg); cursor: text;
 }
 .searchbox > span:not(.kbd) { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -174,7 +176,11 @@ mark { background: color-mix(in srgb, #f5c400 40%, transparent); color: inherit;
 .page.wide { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 440px); gap: 28px; align-items: start; }
 .page.wide .aside { position: sticky; top: 14px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 @media (max-width: 1100px) { .page.wide { display: block; } .page.wide .aside { position: static; margin-top: 22px; } }
-@media (max-width: 720px) { .page { padding: 16px 16px 48px; } .side { width: 230px; } .searchbox { width: auto; flex: 1 1 auto; } .bar .title .ver { display: none; } }
+/* Narrow: the Problems button keeps its icon (and counts), so the document's title keeps its room. */
+@media (max-width: 720px) {
+  .page { padding: 16px 16px 48px; } .side { width: 230px; } .searchbox { max-width: none; }
+  .bar .title .ver { display: none; } .bar .tlabel { display: none; }
+}
 .crumbs { color: var(--muted-fg); font-size: 12px; margin-bottom: 6px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .crumbs a { cursor: pointer; } .crumbs a:hover { color: var(--fg); text-decoration: underline; }
 h1.h { font-size: 22px; line-height: 1.3; margin: 0 0 8px; font-weight: 650; letter-spacing: -.01em; overflow-wrap: anywhere; }

@@ -73,3 +73,14 @@ test('a sidebar detail with no room for a few letters is hidden, not cut to one'
   assert.match(rule('.nrow .txt > span'), /line-height: var\(--row\)/)
   assert.match(rule('.nrow .det'), /min-width: 5em/)
 })
+
+test('in the narrow layout the Problems button drops its word, so the title keeps its room', () => {
+  // Before: at 550 px the search box and "Problems" squeezed "Bookshelf API" to "Bookshe…".
+  const narrow = css.match(/@media \(max-width: 720px\) \{([\s\S]*?)\n\}/)?.[1] ?? ''
+  assert.match(narrow, /\.bar \.tlabel \{ display: none; \}/)
+  assert.match(narrow, /\.bar \.title \.ver \{ display: none; \}/)
+  // The search box starts at its minimum and only grows into free room, so it never squeezes the title.
+  const rule = (selector: string) => css.match(new RegExp(`^${selector.replace(/[.]/g, '\\.')} \\{([^}]*)\\}`, 'm'))?.[1] ?? ''
+  assert.match(rule('.searchbox'), /flex: 100 1 96px; min-width: 96px; max-width: min\(340px, 34vw\)/)
+  assert.ok(!/(^|[^-])width:/.test(rule('.searchbox')), 'no fixed width')
+})

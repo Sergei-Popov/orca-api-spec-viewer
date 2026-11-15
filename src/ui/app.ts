@@ -560,7 +560,7 @@ export class App {
     for (const r of this.problemRows) counts[r.problem.severity]++
     this.problemsBtn.replaceChildren()
     this.problemsBtn.hidden = !a || (!a.detection.spec && this.problemRows.length === 0)
-    if (counts.error + counts.warning + counts.info === 0) this.problemsBtn.append(svg(icons.ok), h('span', null, this.t.problems))
+    if (counts.error + counts.warning + counts.info === 0) this.problemsBtn.append(svg(icons.ok), h('span', { className: 'tlabel' }, this.t.problems))
     else {
       const wrap = h('span', { className: 'counts' })
       if (counts.error) wrap.append(h('span', { className: 'count error' }, svg(icons.error), String(counts.error)))
