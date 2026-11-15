@@ -22,10 +22,16 @@ All notable changes to this plugin are documented here. The format follows
 - A schema tree with constraints, `allOf` merging, `oneOf`/`anyOf` tabs with the discriminator
   mapping, and recursion shown as links.
 - Given and generated examples, and offline code samples for curl, `fetch`, Python `requests`
-  and HTTPie with copy buttons.
-- Lazy `$ref` and `$dynamicRef` resolution with cycle detection; external references shown as
-  such, and other files can be added by hand for the session.
+  and HTTPie with copy buttons. Values are quoted for the shell and never read local files; a
+  method that is not a valid HTTP method name gets no samples.
+- Lazy `$ref` and `$dynamicRef` resolution relative to the nearest `$id`, with cycle detection
+  and a report for chains longer than 128 references; external references shown as such, and
+  other files can be added by hand for the session.
 - A problems panel with structural checks per version and lint rules, each with its line,
-  column and JSON pointer, and a source view that marks them.
+  column and JSON pointer, and a source view that marks them, scrolls sideways and says how much
+  of a long line it leaves out.
+- YAML anchors and aliases resolved once, with a warning for an alias inside its own node and an
+  error past a million values; the first document of a multi-document YAML file, with a note.
+- Search that lists the best 200 matches and counts all of them.
 - Live redraw on changes that keeps the page, scroll position and open parts.
 - English and Russian interface, light and dark themes, plugin and tab icons.
