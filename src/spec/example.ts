@@ -29,7 +29,6 @@ const FORMATS: Record<string, unknown> = {
   'uri-reference': '/path',
   iri: 'https://example.com',
   url: 'https://example.com',
-  uuid: '3fa85f64-5717-4562-b3fc-2c963f66afa6',
   byte: 'U3dhZ2dlciByb2Nrcw==',
   binary: '<binary>',
   password: '********',
@@ -39,8 +38,19 @@ const FORMATS: Record<string, unknown> = {
   'uri-template': 'https://example.com/{id}'
 }
 
+const UUID = '3fa85f64-5717-4562-b3fc-'
+const UUID_TAIL = 0x2c963f66afa6
+
+/**
+ * The n-th placeholder UUID of one example. The first is the usual one; later ones change the
+ * last group, so two ids in one example (a book and its shelf) never look like the same record.
+ */
+export function placeholderUuid(n: number): string {
+  return UUID + ((UUID_TAIL + n * 0x9e3779b1) % 2 ** 48).toString(16).padStart(12, '0')
+}
+
 export function exampleFromSchema(refs: Refs, schema: unknown, loc: Loc, options: ExampleOptions): unknown {
-  const state = { nodes: 0, maxNodes: options.maxNodes ?? 2000, maxDepth: options.maxDepth ?? 10, mode: options.mode }
+  const state = { nodes: 0, maxNodes: options.maxNodes ?? 2000, maxDepth: options.maxDepth ?? 10, mode: options.mode, uuids: 0 }
   return build(refs, schema, loc, state, 0, new Set())
 }
 
@@ -49,6 +59,8 @@ interface State {
   maxNodes: number
   maxDepth: number
   mode: 'request' | 'response'
+  /** Placeholder UUIDs given out so far. */
+  uuids: number
 }
 
 function build(refs: Refs, raw: unknown, loc: Loc, state: State, depth: number, seen: Set<string>): unknown {
@@ -145,7 +157,7 @@ function build(refs: Refs, raw: unknown, loc: Loc, state: State, depth: number, 
       return Array.from({ length: Math.max(1, min) }, () => value)
     }
     case 'string':
-      return stringExample(schema)
+      return stringExample(schema, state)
     case 'integer':
     case 'number':
       return numberExample(schema, type === 'integer')
@@ -160,8 +172,9 @@ function build(refs: Refs, raw: unknown, loc: Loc, state: State, depth: number, 
   return undefined
 }
 
-function stringExample(schema: Record<string, unknown>): string {
+function stringExample(schema: Record<string, unknown>, state: State): string {
   const format = own(schema, 'format')
+  if (format === 'uuid') return placeholderUuid(state.uuids++)
   if (typeof format === 'string' && Object.prototype.hasOwnProperty.call(FORMATS, format)) return FORMATS[format] as string
   const min = typeof own(schema, 'minLength') === 'number' ? (own(schema, 'minLength') as number) : 0
   const max = typeof own(schema, 'maxLength') === 'number' ? (own(schema, 'maxLength') as number) : Infinity
