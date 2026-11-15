@@ -4,7 +4,7 @@
 
 import type { Model } from '../analyze'
 import type { AsyncApiModel } from '../spec/asyncapi'
-import type { OpenApiModel, Operation, TagNode } from '../spec/openapi'
+import { flatTags, type OpenApiModel, type Operation, type TagNode } from '../spec/openapi'
 import { toPointer } from '../spec/pointer'
 
 export interface NavLabels {
@@ -288,13 +288,7 @@ export function pageIndex(model: Model | null): Map<string, string> {
       put(op.declared.path, op.key, op.declared.doc)
       put(op.loc.path, op.key, op.loc.doc)
     }
-    const walkTags = (tags: TagNode[]) => {
-      for (const tag of tags) {
-        if (tag.loc) put(tag.loc.path, tag.key, tag.loc.doc)
-        walkTags(tag.children)
-      }
-    }
-    walkTags(m.tags)
+    for (const tag of flatTags(m.tags)) if (tag.loc) put(tag.loc.path, tag.key, tag.loc.doc)
     for (const entries of m.components.values()) for (const entry of entries) put(entry.loc.path, entry.key, entry.loc.doc)
   } else if (model.kind === 'asyncapi') {
     const m = model.model

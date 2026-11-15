@@ -1,5 +1,7 @@
 import { assert, test } from 'orca/testing'
 import { analyze } from '../analyze'
+import { problemMessage, stringsFor } from '../i18n'
+import { flatTags, MAX_TAG_DEPTH, type OpenApiModel } from '../spec/openapi'
 import { ancestorsOf, defaultExpanded, flattenNav, navTree, pageFor, pageIndex, type NavLabels } from './nav'
 import { buildSearchIndex, search, searchCounted } from './search'
 
@@ -119,4 +121,65 @@ paths:
   const counted = searchCounted(buildSearchIndex(analyze(many.join('\n')).model), 'item')
   assert.equal(counted.hits.length, 200)
   assert.equal(counted.total, 300)
+})
+
+function tagSpec(tags: { name: string; parent?: string }[], opTag: string): string {
+  return JSON.stringify({
+    openapi: '3.2.0',
+    info: { title: 'T', version: '1' },
+    tags,
+    paths: { '/a': { get: { summary: 'Op A', tags: [opTag], responses: { 200: { description: 'ok' } } } } }
+  })
+}
+
+function navLabels(nodes: ReturnType<typeof navTree>): string[] {
+  const out: string[] = []
+  const stack = [...nodes]
+  while (stack.length > 0) {
+    const node = stack.pop()!
+    out.push(node.label)
+    stack.push(...(node.children ?? []))
+  }
+  return out
+}
+
+test('a tag parent chain thousands deep loads, nested up to the cap', () => {
+  // Before: tagNode recursed once per level (a stack overflow made the file unreadable).
+  const tags = Array.from({ length: 4000 }, (_, i) => (i === 0 ? { name: 't0' } : { name: `t${i}`, parent: `t${i - 1}` }))
+  const a = analyze(tagSpec(tags, 't3999'))
+  assert.deepEqual(a.problems.filter((p) => p.severity !== 'info').map((p) => p.rule), [])
+  const m = (a.model as { model: OpenApiModel }).model
+  const all = flatTags(m.tags)
+  assert.equal(all.length, 4000)
+  let deepest = 0
+  const depth = new Map(m.tags.map((t) => [t, 0]))
+  for (const tag of all) for (const c of tag.children) depth.set(c, depth.get(tag)! + 1)
+  for (const d of depth.values()) deepest = Math.max(deepest, d)
+  assert.equal(deepest, MAX_TAG_DEPTH - 1)
+  const tree = navTree(a.model, labels)
+  assert.ok(navLabels(tree).includes('Op A'))
+  const rows = flattenNav(tree, defaultExpanded(tree), '')
+  assert.ok(rows.length > 0)
+  ancestorsOf(tree)
+  pageIndex(a.model)
+  assert.equal(buildSearchIndex(a.model).filter((e) => e.kind === 'tag').length, 4000)
+})
+
+test('a tag parent cycle of any length is reported once, and its tags and operations still show', () => {
+  for (const n of [3, 64, 65, 66]) {
+    // Before: a cycle longer than 64 tags had no root, so its tags and operations vanished.
+    const tags = Array.from({ length: n }, (_, i) => ({ name: `t${i}`, parent: `t${(i + n - 1) % n}` }))
+    tags.push({ name: 'leaf', parent: 't1' })
+    const a = analyze(tagSpec(tags, 'leaf'))
+    const cycles = a.problems.filter((p) => p.rule === 'tag-parent-cycle')
+    assert.equal(cycles.length, 1, `n=${n}`)
+    assert.equal(cycles[0].params.count, n)
+    assert.deepEqual(cycles[0].path, ['tags', '0', 'parent'])
+    const m = (a.model as { model: OpenApiModel }).model
+    assert.equal(m.tags.length, n, `n=${n}: every tag of the cycle is at the top`)
+    assert.deepEqual(m.tags.find((t) => t.name === 't1')!.children.map((t) => t.name), ['leaf'])
+    assert.ok(navLabels(navTree(a.model, labels)).includes('Op A'), `n=${n}`)
+  }
+  const message = problemMessage(stringsFor('en'), analyze(tagSpec([{ name: 'a', parent: 'b' }, { name: 'b', parent: 'a' }], 'a')).problems.find((p) => p.rule === 'tag-parent-cycle')!)
+  assert.equal(message, 'Tag parents form a cycle of 2: a → b → a. These tags are shown at the top level.')
 })

@@ -51,6 +51,7 @@ export type RuleCode =
   | 'duplicate-tag'
   | 'undeclared-tag'
   | 'unknown-parent-tag'
+  | 'tag-parent-cycle'
   | 'link-operation'
   | 'multiple-body'
   | 'schema-keyword'

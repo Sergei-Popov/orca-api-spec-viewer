@@ -3,7 +3,7 @@
 
 import type { ArazzoModel } from '../spec/arazzo'
 import type { AsyncApiModel } from '../spec/asyncapi'
-import { componentsPath, pathTemplateNames, serverList, type OpenApiModel, type Operation } from '../spec/openapi'
+import { componentsPath, pathTemplateNames, serverList, tagParentCycles, type OpenApiModel, type Operation } from '../spec/openapi'
 import { getAt, isObject, own, str, toPointer } from '../spec/pointer'
 import { locKey, MAX_HOPS, refOf, type Refs } from '../spec/refs'
 import type { WalkContext } from './walker'
@@ -202,10 +202,23 @@ export function checkOpenApi(ctx: WalkContext, refs: Refs, model: OpenApiModel):
       if (declared.has(tag.name)) ctx.problems.warn('duplicate-tag', ['tags', String(index)], { name: tag.name })
       declared.add(tag.name)
     })
+    const parentOf = new Map<string, string>()
+    const indexOf = new Map<string, number>()
     tags.forEach((tag, index) => {
       const parent = isObject(tag) ? str(own(tag, 'parent')) : undefined
       if (parent !== undefined && !declared.has(parent)) ctx.problems.error('unknown-parent-tag', ['tags', String(index), 'parent'], { name: parent })
+      if (!isObject(tag) || typeof tag.name !== 'string' || indexOf.has(tag.name)) return
+      indexOf.set(tag.name, index)
+      if (parent !== undefined && declared.has(parent)) parentOf.set(tag.name, parent)
     })
+    // One warning per cycle, at the parent of its first tag in the document.
+    for (const cycle of tagParentCycles(parentOf)) {
+      const first = cycle.reduce((a, b) => (indexOf.get(a)! <= indexOf.get(b)! ? a : b))
+      const from = cycle.indexOf(first)
+      const ordered = [...cycle.slice(from), ...cycle.slice(0, from), first]
+      const shown = ordered.length > 6 ? [...ordered.slice(0, 5), '…', first] : ordered
+      ctx.problems.warn('tag-parent-cycle', ['tags', String(indexOf.get(first)), 'parent'], { tags: shown.join(' → '), count: cycle.length })
+    }
   }
   if (declared.size > 0) {
     const reported = new Set<string>()

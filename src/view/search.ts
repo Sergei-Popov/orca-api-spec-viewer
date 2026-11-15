@@ -3,6 +3,7 @@
 // query matches when every word appears somewhere in an entry, and ranks title hits first.
 
 import type { Model } from '../analyze'
+import { flatTags } from '../spec/openapi'
 import { isObject, own, str } from '../spec/pointer'
 
 export type EntryKind = 'operation' | 'webhook' | 'tag' | 'component' | 'channel' | 'message' | 'server' | 'workflow' | 'step' | 'action'
@@ -70,13 +71,9 @@ export function buildSearchIndex(model: Model | null): SearchEntry[] {
         )
       )
     }
-    const walkTags = (tags: typeof m.tags) => {
-      for (const tag of tags) {
-        if (tag.name) out.push(entry(tag.key, 'tag', tag.title, [field(3, tag.name), field(1, tag.tag ? str(own(tag.tag, 'description')) : undefined)]))
-        walkTags(tag.children)
-      }
+    for (const tag of flatTags(m.tags)) {
+      if (tag.name) out.push(entry(tag.key, 'tag', tag.title, [field(3, tag.name), field(1, tag.tag ? str(own(tag.tag, 'description')) : undefined)]))
     }
-    walkTags(m.tags)
     for (const [section, entries] of m.components) {
       for (const c of entries) {
         const description = isObject(c.value) ? (str(own(c.value, 'description')) ?? str(own(c.value, 'title'))) : undefined

@@ -9,7 +9,7 @@ import type { MarkdownHost } from '../markdown/render'
 import { parseText } from '../parse/index'
 import { familyLabel } from '../spec/detect'
 import { operationDetails } from '../spec/operation'
-import type { Operation } from '../spec/openapi'
+import { flatTags, type Operation } from '../spec/openapi'
 import { fragmentToPath, isObject, own, parsePointer, str, toPointer } from '../spec/pointer'
 import type { Loc } from '../spec/refs'
 import { ancestorsOf, defaultExpanded, flattenNav, navTree, pageFor, pageIndex, type NavLabels, type NavNode, type NavRow } from '../view/nav'
@@ -1068,18 +1068,6 @@ export class App {
     clearTimeout(this.toastTimer)
     this.toastTimer = window.setTimeout(() => this.toastEl.classList.remove('show'), 2200)
   }
-}
-
-function flatTags<T extends { children: T[] }>(tags: T[]): T[] {
-  const out: T[] = []
-  const walk = (list: T[]) => {
-    for (const t of list) {
-      out.push(t)
-      walk(t.children)
-    }
-  }
-  walk(tags)
-  return out
 }
 
 function kindName(kind: string): string {
