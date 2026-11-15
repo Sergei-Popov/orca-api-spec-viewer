@@ -71,7 +71,15 @@ export class Refs {
   private readonly names = new Map<string, string>()
   private readonly indexes = new Map<string, DocIndex>()
 
-  constructor(main: unknown) {
+  /** Merged views of a reference's target with its siblings, one per referring object. */
+  private readonly merged = new WeakMap<object, { target: unknown; value: unknown }>()
+
+  /**
+   * `siblings`: a reference's sibling fields apply, as in OpenAPI 3.1+ (JSON Schema 2020-12, and
+   * Reference Objects' summary and description). In Swagger 2.0, OpenAPI 3.0 and AsyncAPI
+   * (draft-07) they are ignored.
+   */
+  constructor(main: unknown, private readonly options: { siblings?: boolean } = {}) {
     this.docs.set('', main)
   }
 
@@ -165,11 +173,13 @@ export class Refs {
   follow(value: unknown, loc: Loc): Followed {
     const via: string[] = []
     const seen = new Set<string>([locKey(loc)])
+    const referring: Record<string, unknown>[] = []
     let current = value
     let at = loc
     for (let hop = 0; ; hop++) {
       const ref = refOf(current)
-      if (!ref) return { value: current, loc: at, via }
+      if (!ref) return { value: this.options.siblings ? this.withSiblings(current, referring, isSchemaPlace(at.path)) : current, loc: at, via }
+      referring.push(current as Record<string, unknown>)
       // A long chain is not a cycle: it stops with its own reason.
       if (hop >= MAX_HOPS) return { value: current, loc: at, via, stop: { kind: 'missing', ref: ref.ref, reason: 'too-long' } }
       via.push(ref.ref)
@@ -181,6 +191,28 @@ export class Refs {
       current = resolution.value
       at = resolution.loc
     }
+  }
+
+  /**
+   * The target as its references' siblings make it, innermost reference first. The view is cached
+   * per referring object, so the same reference gives the same object (and recursion stays
+   * recognisable); without siblings the target itself is returned.
+   */
+  private withSiblings(target: unknown, referring: Record<string, unknown>[], schema: boolean): unknown {
+    let value = target
+    for (let i = referring.length - 1; i >= 0; i--) {
+      const outer = referring[i]
+      if (!Object.keys(outer).some(isSibling)) continue
+      const cached = this.merged.get(outer)
+      if (cached && cached.target === value) {
+        value = cached.value
+        continue
+      }
+      const next = mergeSiblings(value, outer, schema)
+      this.merged.set(outer, { target: value, value: next })
+      value = next
+    }
+    return value
   }
 
   private findId(doc: string, uri: string): readonly string[] | null {
@@ -197,6 +229,52 @@ export class Refs {
     buildIndex(this.docs.get(doc), index)
     return index
   }
+}
+
+/** Keywords that only describe: a sibling's value replaces the target's. */
+const ANNOTATIONS = new Set(['title', 'summary', 'description', 'default', 'examples', 'example', 'readOnly', 'writeOnly', 'deprecated', '$comment', 'externalDocs', 'xml'])
+/** Bounds: where both give one, the stricter applies. */
+const LOWER_BOUNDS = new Set(['minimum', 'exclusiveMinimum', 'minLength', 'minItems', 'minProperties', 'minContains'])
+const UPPER_BOUNDS = new Set(['maximum', 'exclusiveMaximum', 'maxLength', 'maxItems', 'maxProperties', 'maxContains'])
+
+/** Component sections and roots whose objects are not schemas (a schema inside them still is). */
+const NOT_SCHEMAS = new Set(['parameters', 'responses', 'requestBodies', 'headers', 'examples', 'links', 'callbacks', 'securitySchemes', 'pathItems', 'mediaTypes'])
+
+/** Whether a reference's target is a schema, judged by where it is. */
+function isSchemaPlace(path: readonly string[]): boolean {
+  const inside = (from: number) => path.slice(from).some((segment) => segment === 'schema' || segment === 'itemSchema')
+  if (path[0] === 'components' && NOT_SCHEMAS.has(path[1])) return inside(2)
+  if (path[0] === 'paths' || path[0] === 'webhooks') return inside(1)
+  return true
+}
+
+/** A field beside `$ref` that says something about the target (not `$id`, `$defs`, …). */
+function isSibling(key: string): boolean {
+  return !key.startsWith('$') || key === '$comment'
+}
+
+/**
+ * A reference's target with the reference's siblings applied: annotations replace the target's,
+ * bounds take the stricter value, `required` lists are joined and `properties` added to; any
+ * other keyword the target lacks is added (where both have one, both apply, and the target's is
+ * shown).
+ */
+function mergeSiblings(target: unknown, referring: Record<string, unknown>, schema: boolean): unknown {
+  if (!isObject(target)) return target
+  const out: Record<string, unknown> = { ...target }
+  for (const key of Object.keys(referring)) {
+    if (!isSibling(key)) continue
+    // A Reference Object to a parameter, response, … may override only these two.
+    if (!schema && key !== 'summary' && key !== 'description') continue
+    const mine = referring[key]
+    const theirs = target[key]
+    if (ANNOTATIONS.has(key) || !Object.prototype.hasOwnProperty.call(target, key)) out[key] = mine
+    else if (typeof mine === 'number' && typeof theirs === 'number' && LOWER_BOUNDS.has(key)) out[key] = Math.max(mine, theirs)
+    else if (typeof mine === 'number' && typeof theirs === 'number' && UPPER_BOUNDS.has(key)) out[key] = Math.min(mine, theirs)
+    else if (key === 'required' && Array.isArray(mine) && Array.isArray(theirs)) out[key] = [...new Set([...theirs, ...mine])]
+    else if (key === 'properties' && isObject(mine) && isObject(theirs)) out[key] = { ...theirs, ...mine }
+  }
+  return out
 }
 
 /** The reference an object carries: `$ref`, or a schema's `$dynamicRef`. */

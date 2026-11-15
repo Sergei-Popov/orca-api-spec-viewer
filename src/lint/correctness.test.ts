@@ -2,6 +2,7 @@
 // viewer: each fixture is the smallest document that showed one.
 import { assert, test } from 'orca/testing'
 import { analyze } from '../analyze'
+import { exampleFromSchema } from '../spec/example'
 import type { OpenApiModel } from '../spec/openapi'
 import { operationDetails } from '../spec/operation'
 import { buildRequest } from '../spec/samples'
@@ -299,4 +300,71 @@ paths:
       PURGE: { responses: { '200': { description: ok } } }
 `
   assert.deepEqual(analyze(spec).problems.map((p) => `${p.severity} ${p.rule} ${p.path.at(-1)}`), ['error bad-key GET', 'warning bad-key get', 'warning bad-key Query'])
+})
+
+test('OpenAPI 3.1+: a reference’s siblings apply to what it points at', () => {
+  // Before: `{ $ref: Id, readOnly: true }` lost readOnly (so the request example sent id), and
+  // maxLength, examples, minItems, default and overriding descriptions were all dropped.
+  const spec = (version: string) => `openapi: ${version}
+info: { title: T, version: '1' }
+paths:
+  /pets:
+    post:
+      parameters:
+        - { $ref: '#/components/parameters/Limit', description: Overridden, required: true }
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/Pet' } } } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok', description: Overridden response }
+components:
+  parameters:
+    Limit: { name: limit, in: query, description: Original, schema: { type: integer } }
+  responses:
+    Ok: { description: Original response }
+  schemas:
+    Pet:
+      type: object
+      properties:
+        id: { $ref: '#/components/schemas/Id', readOnly: true }
+        nick: { $ref: '#/components/schemas/Name', maxLength: 10, examples: [Rex] }
+        size: { $ref: '#/components/schemas/Size', maximum: 50, minimum: 1 }
+        tags: { $ref: '#/components/schemas/Tags', minItems: 1 }
+        next: { $ref: '#/components/schemas/Pet', description: The next pet }
+    Id: { type: integer }
+    Name: { type: string, maxLength: 40 }
+    Size: { type: integer, minimum: 0, maximum: 100 }
+    Tags: { type: array, items: { type: string } }
+`
+  const view = (version: string) => {
+    const a = analyze(spec(version))
+    const model = (a.model as { model: OpenApiModel }).model
+    const details = operationDetails(model, a.refs, model.operations[0])
+    const media = details.body!.media[0]
+    const props = (a.refs.follow(media.schema!.value, media.schema!.loc).value as { properties: Record<string, unknown> }).properties
+    const prop = (name: string) => a.refs.follow(props[name], { doc: '', path: ['components', 'schemas', 'Pet', 'properties', name] }).value
+    return {
+      param: [details.params[0].description, details.params[0].required],
+      response: details.responses[0].description,
+      example: exampleFromSchema(a.refs, media.schema!.value, media.schema!.loc, { mode: 'request' }) as Record<string, unknown>,
+      prop
+    }
+  }
+  const v31 = view('3.1.1')
+  // A Reference Object overrides summary and description only.
+  assert.deepEqual(v31.param, ['Overridden', false])
+  assert.equal(v31.response, 'Overridden response')
+  assert.equal('id' in v31.example, false, 'readOnly from the sibling')
+  assert.equal(v31.example.nick, 'Rex')
+  assert.deepEqual(v31.prop('nick'), { type: 'string', maxLength: 10, examples: ['Rex'] })
+  // Where both give a bound, the stricter applies.
+  assert.deepEqual(v31.prop('size'), { type: 'integer', minimum: 1, maximum: 50 })
+  assert.deepEqual(v31.prop('tags'), { type: 'array', items: { type: 'string' }, minItems: 1 })
+  // The same reference gives the same view, so recursion is still seen as recursion.
+  assert.equal(v31.prop('next'), v31.prop('next'))
+  assert.equal((v31.prop('next') as { description: string }).description, 'The next pet')
+  // In 3.0 siblings are ignored.
+  const v30 = view('3.0.3')
+  assert.deepEqual(v30.param, ['Original', false])
+  assert.equal(v30.response, 'Original response')
+  assert.ok('id' in v30.example)
+  assert.deepEqual(v30.prop('nick'), { type: 'string', maxLength: 40 })
 })
