@@ -1,5 +1,6 @@
 import { assert, test } from 'orca/testing'
 import { analyze } from '../analyze'
+import { isRuntimeExpression } from './arazzo'
 import type { AsyncApiModel } from './asyncapi'
 import { detect } from './detect'
 import { exampleFromSchema, placeholderUuid } from './example'
@@ -174,6 +175,14 @@ components:
   const again = exampleFromSchema(refs, { $ref: '#/components/schemas/Shelf' }, at, { mode: 'response' }) as { id: string }
   assert.equal(again.id, book.id, 'every example starts from the first placeholder')
   assert.equal(new Set(Array.from({ length: 2000 }, (_, n) => placeholderUuid(n))).size, 2000)
+})
+
+test('Arazzo runtime expressions are told apart from literal strings', () => {
+  // A step parameter `value: $inputs.author` was shown as the JSON string "$inputs.author".
+  for (const e of ['$inputs.author', '$statusCode', '$url', '$method', '$response.body#/items/0/id', '$steps.findBook.outputs.bookId', '$sourceDescriptions.shelf.listBooks', '$components.parameters.page'])
+    assert.ok(isRuntimeExpression(e), e)
+  for (const v of ['$5', '$', '$inputs', '$inputs.', '$statusCodes', 'inputs.author', 'Bearer {$inputs.token}', ' $inputs.a', 1, null, { a: '$inputs.a' }])
+    assert.ok(!isRuntimeExpression(v), String(v))
 })
 
 test('code samples for curl, fetch, Python and HTTPie', () => {
