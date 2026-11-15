@@ -2,7 +2,7 @@ import { assert, test } from 'orca/testing'
 import { analyze } from '../analyze'
 import type { OpenApiModel } from './openapi'
 import { operationDetails } from './operation'
-import { buildRequest, renderSample, sampleLanguages, type SampleRequest } from './samples'
+import { buildRequest, renderSample, sampleLanguages, wellFormed, type SampleRequest } from './samples'
 
 function requests(text: string): { route: string; method: string; request: SampleRequest }[] {
   const a = analyze(text)
@@ -449,4 +449,78 @@ test('a huge example is replaced by one made from the schema', () => {
   const request = one(spec, '/a')
   assert.deepEqual(request.body?.json, { n: 0 })
   for (const language of sampleLanguages(request)) assert.ok(renderSample(language, request).length < 1000, language)
+})
+
+test('an unpaired surrogate in a value becomes U+FFFD with a note, never an error', () => {
+  // Before: encodeURIComponent threw "URI malformed" and the whole operation page was lost.
+  const half = String.fromCharCode(0xd83d)
+  const spec = JSON.stringify({
+    openapi: '3.1.0',
+    info: { title: 'T', version: '1' },
+    servers: [{ url: 'https://api.test' }],
+    paths: {
+      '/items/{id}': {
+        get: {
+          parameters: [
+            { name: 'id', in: 'path', required: true, example: half },
+            { name: 'q' + String.fromCharCode(0xd800), in: 'query', required: true, example: 'x' + String.fromCharCode(0xde00) },
+            { name: 'X-Note', in: 'header', required: true, example: 'a' + half }
+          ],
+          responses: { 200: { description: 'ok' } }
+        }
+      },
+      '/ok/{id}': { get: { parameters: [{ name: 'id', in: 'path', required: true, example: '\u{1F600}' }], responses: { 200: { description: 'ok' } } } }
+    }
+  })
+  const broken = one(spec, '/items/{id}')
+  assert.equal(broken.replaced, true)
+  assert.equal(broken.url, 'https://api.test/items/%EF%BF%BD')
+  for (const language of sampleLanguages(broken)) {
+    const sample = renderSample(language, broken)
+    assert.equal(wellFormed(sample), sample, language)
+  }
+  assert.match(renderSample('curl', broken), /q%EF%BF%BD=x%EF%BF%BD/)
+  const fine = one(spec, '/ok/{id}')
+  assert.equal(fine.replaced, undefined)
+  assert.equal(fine.url, 'https://api.test/ok/%F0%9F%98%80')
+  assert.equal(wellFormed('a\u{1F600}b'), 'a\u{1F600}b')
+  assert.equal(wellFormed(String.fromCharCode(0xdc00, 0xd800)), '\ufffd\ufffd')
+})
+
+test('fetch and Python literals escape CR and the Unicode line separators', () => {
+  // Before: a CR inside a single-quoted JS string made the fetch sample a syntax error.
+  const spec = `openapi: 3.0.3
+info: { title: T, version: '1' }
+servers: [{ url: 'https://api.test' }]
+paths:
+  /csv:
+    post:
+      parameters: [{ name: X-Note, in: header, required: true, example: "a\\rb\\u2028c\\u2029d" }]
+      requestBody: { content: { text/csv: { example: "id,name\\r\\n1,Rex\\r\\n" } } }
+      responses: { '200': { description: ok } }
+  /form:
+    post:
+      requestBody: { content: { application/x-www-form-urlencoded: { example: { note: "line1\\r\\nline2" } } } }
+      responses: { '200': { description: ok } }
+  /multi:
+    post:
+      requestBody: { content: { multipart/form-data: { schema: { type: object, properties: { note: { type: string, example: "line1\\r\\nline2" } } } } } }
+      responses: { '200': { description: ok } }
+`
+  for (const route of ['/csv', '/form', '/multi']) {
+    const request = one(spec, route)
+    for (const language of ['fetch', 'python'] as const) {
+      const sample = renderSample(language, request)
+      assert.ok(!/[\r\u2028\u2029]/.test(sample), `${language} ${route}: a raw line terminator`)
+      if (language === 'fetch') {
+        // No single-quoted literal runs over a line break.
+        for (const line of sample.split('\n')) assert.equal((line.replace(/\\./g, '').match(/'/g) ?? []).length % 2, 0, line)
+      }
+    }
+  }
+  const csv = one(spec, '/csv')
+  assert.match(renderSample('fetch', csv), /body: 'id,name\\r\\n1,Rex\\r\\n',/)
+  assert.match(renderSample('fetch', csv), /'X-Note': 'a\\rb\\u2028c\\u2029d',/)
+  assert.match(renderSample('python', csv), /data="id,name\\r\\n1,Rex\\r\\n"/)
+  assert.match(renderSample('python', csv), /"X-Note": "a\\rb\\u2028c\\u2029d"/)
 })

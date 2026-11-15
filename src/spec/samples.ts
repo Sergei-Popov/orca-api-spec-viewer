@@ -31,6 +31,8 @@ export interface SampleRequest {
   headers: [string, string][]
   /** `basic` auth as curl's `-u` and requests' `auth=`. */
   basicAuth: boolean
+  /** A value had an unpaired UTF-16 surrogate, which the samples show as U+FFFD. */
+  replaced?: boolean
   body?: {
     mediaType: string
     json?: unknown
@@ -72,7 +74,8 @@ export function buildRequest(model: OpenApiModel, refs: Refs, op: Operation, det
     if (param.stop) continue
     const value = paramExample(refs, param)
     if (param.in === 'path') {
-      if (value !== undefined) path = path.split(`{${param.name}}`).join(encodeURIComponent(value))
+      if (value !== undefined) path = path.split(`{${param.name}}`).join(encodeComponent(value))
+      if (value !== undefined && illFormed(value)) request.replaced = true
     } else if (!param.required && value === undefined) {
       continue
     } else if (!param.required && !param.hasExample && param.examples.length === 0) {
@@ -141,7 +144,63 @@ export function buildRequest(model: OpenApiModel, refs: Refs, op: Operation, det
     request.headers = request.headers.filter(([name]) => name !== 'Content-Type')
   }
   request.url = base + path
+  if ([request.url, request.query, request.headers, request.body].some((v) => illFormed(v))) request.replaced = true
   return request
+}
+
+/**
+ * Text with each unpaired UTF-16 surrogate (half of a character, such as from a `\uD83D` escape)
+ * replaced by U+FFFD. Such text cannot be encoded as UTF-8: encodeURIComponent throws on it, and a
+ * copied sample would lose it anyway.
+ */
+export function wellFormed(text: string): string {
+  let out = ''
+  let from = 0
+  for (let i = loneSurrogate(text, 0); i >= 0; i = loneSurrogate(text, from)) {
+    out += text.slice(from, i) + REPLACEMENT
+    from = i + 1
+  }
+  return from === 0 ? text : out + text.slice(from)
+}
+
+const REPLACEMENT = String.fromCharCode(0xfffd)
+
+/** The index of the first unpaired surrogate at or after `from`, or -1. */
+function loneSurrogate(text: string, from: number): number {
+  for (let i = from; i < text.length; i++) {
+    const c = text.charCodeAt(i)
+    if (c < 0xd800 || c > 0xdfff) continue
+    if (c <= 0xdbff) {
+      const next = text.charCodeAt(i + 1)
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        i++
+        continue
+      }
+    }
+    return i
+  }
+  return -1
+}
+
+/** Whether a string, or any string or key in a JSON value, has an unpaired surrogate. */
+function illFormed(value: unknown, budget = 100_000): boolean {
+  const stack: unknown[] = [value]
+  while (stack.length > 0 && budget-- > 0) {
+    const v = stack.pop()
+    if (typeof v === 'string') {
+      if (loneSurrogate(v, 0) >= 0) return true
+    } else if (Array.isArray(v)) {
+      for (const item of v) stack.push(item)
+    } else if (isObject(v)) {
+      for (const key of Object.keys(v)) stack.push(key, v[key])
+    }
+  }
+  return false
+}
+
+/** encodeURIComponent that does not throw on an unpaired surrogate. */
+function encodeComponent(text: string): string {
+  return encodeURIComponent(wellFormed(text))
 }
 
 function capitalize(text: string): string {
@@ -221,13 +280,13 @@ function formFields(refs: Refs, media: MediaView, example: unknown): FormField[]
 
 function urlWithQuery(request: SampleRequest): string {
   if (request.query.length === 0) return request.url
-  const query = request.query.map(([k, v]) => `${encodeURIComponent(k)}=${encodeQueryValue(v)}`).join('&')
+  const query = request.query.map(([k, v]) => `${encodeComponent(k)}=${encodeQueryValue(v)}`).join('&')
   return `${request.url}${request.url.includes('?') ? '&' : '?'}${query}`
 }
 
 /** Keeps `<API_KEY>`-style placeholders readable in URLs. */
 function encodeQueryValue(value: string): string {
-  return /^<[A-Z_]+>$/.test(value) ? value : encodeURIComponent(value)
+  return /^<[A-Z_]+>$/.test(value) ? value : encodeComponent(value)
 }
 
 /** POSIX shell single quoting, only when needed. */
@@ -243,6 +302,10 @@ export function sampleLanguages(request: SampleRequest): SampleLanguage[] {
 }
 
 export function renderSample(language: SampleLanguage, request: SampleRequest): string {
+  return wellFormed(render(language, request))
+}
+
+function render(language: SampleLanguage, request: SampleRequest): string {
   switch (language) {
     case 'curl':
       return renderCurl(request)
@@ -281,8 +344,12 @@ function renderCurl(request: SampleRequest): string {
   return lines.join(' \\\n  ')
 }
 
+// Characters a single-quoted JS string cannot hold as they are: the quote, the backslash and the
+// four line terminators (CR, LF, U+2028, U+2029).
+const JS_ESCAPES: Record<string, string> = { '\\': '\\\\', "'": "\\'", '\n': '\\n', '\r': '\\r', '\u2028': '\\u2028', '\u2029': '\\u2029' }
+
 function jsString(text: string): string {
-  return `'${text.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n')}'`
+  return `'${text.replace(/[\\'\n\r\u2028\u2029]/g, (c) => JS_ESCAPES[c])}'`
 }
 
 function jsKey(key: string): string {
@@ -330,8 +397,9 @@ function renderFetch(request: SampleRequest): string {
   return out.join('\n')
 }
 
+/** A Python string literal: JSON's escapes are Python's, and U+2028/U+2029 are escaped too. */
 function pyString(text: string): string {
-  return JSON.stringify(text)
+  return JSON.stringify(text).replace(/[\u2028\u2029]/g, (c) => (c === '\u2028' ? '\\u2028' : '\\u2029'))
 }
 
 /** A JSON value as a Python literal. */
