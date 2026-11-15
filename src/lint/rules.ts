@@ -10,9 +10,17 @@ import type { WalkContext } from './walker'
 
 type Path = string[]
 
+/** Where each local target is referred to from: target pointer → the referring paths. */
+export type Usages = Map<string, Path[]>
+
 /** References: unresolved ones are errors; another file's are one note per file. */
-export function checkRefs(ctx: WalkContext, refs: Refs): Set<string> {
-  const used = new Set<string>()
+export function checkRefs(ctx: WalkContext, refs: Refs): Usages {
+  const used: Usages = new Map()
+  const use = (pointer: string, from: Path) => {
+    const list = used.get(pointer)
+    if (list) list.push(from)
+    else used.set(pointer, [from])
+  }
   const external = new Map<string, { count: number; path: Path }>()
   const cache = new Map<string, 'ok' | 'missing' | 'cycle' | 'external'>()
   const schemaBase = ctx.family === 'swagger2' ? ['definitions'] : ['components', 'schemas']
@@ -21,7 +29,7 @@ export function checkRefs(ctx: WalkContext, refs: Refs): Set<string> {
       // A discriminator mapping that names a schema rather than referencing it.
       const target = getAt(ctx.root, [...schemaBase, occurrence.ref])
       if (target === undefined) ctx.problems.error('unresolved-ref', occurrence.path, { ref: occurrence.ref })
-      else used.add(toPointer([...schemaBase, occurrence.ref]))
+      else use(toPointer([...schemaBase, occurrence.ref]), occurrence.path)
       continue
     }
     const known = cache.get(occurrence.ref + (occurrence.dynamic ? ' dyn' : ''))
@@ -36,7 +44,7 @@ export function checkRefs(ctx: WalkContext, refs: Refs): Set<string> {
       ctx.problems.error('unresolved-ref', occurrence.path, { ref: occurrence.ref })
       continue
     }
-    if (resolution.loc.doc === '') used.add(toPointer(resolution.loc.path))
+    if (resolution.loc.doc === '') use(toPointer(resolution.loc.path), occurrence.path)
     let state = known
     if (!state) {
       const followed = refs.follow(resolution.value, resolution.loc)
@@ -50,9 +58,9 @@ export function checkRefs(ctx: WalkContext, refs: Refs): Set<string> {
 }
 
 /** Components no reference reaches. Skipped for libraries (documents without operations). */
-export function checkUnused(ctx: WalkContext, used: Set<string>, sections: { base: Path; skip?: string[] }[]): void {
+export function checkUnused(ctx: WalkContext, used: Usages, sections: { base: Path; skip?: string[] }[]): void {
   const usedPrefixes = new Set<string>()
-  for (const pointer of used) {
+  for (const pointer of used.keys()) {
     const parts = pointer.split('/')
     for (let i = 2; i <= parts.length; i++) usedPrefixes.add(parts.slice(0, i).join('/'))
   }
@@ -105,8 +113,12 @@ export function checkOpenApi(ctx: WalkContext, refs: Refs, model: OpenApiModel):
     for (const name of new Set(dupes)) ctx.problems.error('duplicate-param', ['paths', route], { name, in: 'path' })
     const shape = route.replace(/\{[^{}]+\}/g, '{}')
     const other = shapes.get(shape)
-    if (other !== undefined && other !== route) ctx.problems.error('equivalent-paths', ['paths', route], { other })
-    else shapes.set(shape, route)
+    if (other !== undefined && other !== route) {
+      // The specification forbids such paths; a request is only ambiguous when a method is on both.
+      const methods = new Set(model.paths.find((p) => p.route === other)?.operations.map((o) => o.method))
+      const shared = entry.operations.some((o) => methods.has(o.method))
+      ctx.problems.add('equivalent-paths', shared ? 'error' : 'warning', ['paths', route], { other })
+    } else shapes.set(shape, route)
 
     for (const op of entry.operations) {
       const pathLevel = paramList(refs, own(op.pathItem, 'parameters'), op.pathItemLoc.path.slice())

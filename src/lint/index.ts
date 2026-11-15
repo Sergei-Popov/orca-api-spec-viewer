@@ -9,7 +9,7 @@ import type { Refs } from '../spec/refs'
 import { arazzoDefs, asyncApi2Defs, asyncApi3Defs, overlayDefs } from './defs-async'
 import { openApi3Defs, swagger2Defs } from './defs-openapi'
 import { ProblemList } from './problem'
-import { asyncComponentSections, checkArazzo, checkAsyncApi, checkOpenApi, checkRefs, checkUnused, openApiComponentSections } from './rules'
+import { asyncComponentSections, checkArazzo, checkAsyncApi, checkOpenApi, checkRefs, checkUnused, openApiComponentSections, type Usages } from './rules'
 import { checkSchemas } from './schema-rules'
 import { levelOf, visitObject, type ObjectDef, type WalkContext } from './walker'
 
@@ -38,7 +38,7 @@ function defsFor(family: Family): Record<string, ObjectDef> {
   }
 }
 
-export function lintDocument(root: Record<string, unknown>, family: Family, refs: Refs, lintModel: LintModel): ProblemList {
+export function lintDocument(root: Record<string, unknown>, family: Family, refs: Refs, lintModel: LintModel): { problems: ProblemList; usages: Usages } {
   const problems = new ProblemList()
   const ctx: WalkContext = {
     family,
@@ -61,7 +61,8 @@ export function lintDocument(root: Record<string, unknown>, family: Family, refs
   } else if (lintModel.kind === 'arazzo') {
     checkArazzo(ctx, lintModel.model)
   }
-  return problems
+  return { problems, usages: used }
 }
 
 export { compareSeverity, type Problem, type RuleCode, type Severity } from './problem'
+export type { Usages } from './rules'

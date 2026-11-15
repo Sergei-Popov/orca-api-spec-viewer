@@ -163,6 +163,8 @@ export function search(entries: SearchEntry[], query: string, limit = 200): Sear
     }
     if (!ok) continue
     if (e.deprecated) total *= 0.9
+    // Operations are what people look for most; prefer them over components of the same words.
+    if (e.kind === 'operation' || e.kind === 'webhook') total *= 1.3
     const titleHit = words.some((w) => e.fields[0].lower.includes(w))
     hits.push({ entry: e, score: total, snippet: best && (!titleHit || best.weight === 1) ? snippetOf(best.text, words[0]) : undefined })
   }

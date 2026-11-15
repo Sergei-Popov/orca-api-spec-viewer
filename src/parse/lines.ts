@@ -30,6 +30,16 @@ export class LineIndex {
     return this.lineStarts().length
   }
 
+  /** The text of a 1-based line, without its line break. */
+  line(n: number): string {
+    const starts = this.lineStarts()
+    if (n < 1 || n > starts.length) return ''
+    const start = starts[n - 1]
+    const end = n < starts.length ? starts[n] - 1 : this.text.length
+    const text = this.text.slice(start, Math.min(end, start + 4000))
+    return text.endsWith('\r') ? text.slice(0, -1) : text
+  }
+
   private lineStarts(): number[] {
     if (this.starts) return this.starts
     const starts = [0]
