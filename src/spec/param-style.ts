@@ -40,24 +40,62 @@ function explodes(p: ParamStyle): boolean {
   return p.explode ?? (p.style === 'form' || p.style === 'cookie')
 }
 
+/** What styledPairs found on the way. */
+export interface StyleReport {
+  /** Items were joined with a separator that stays literal (`,` or `|`) once encoded. */
+  joined?: boolean
+  /** deepObject met an array or a nested object, which OpenAPI does not define. */
+  deep?: boolean
+}
+
 /**
- * Name–value pairs of a query, cookie or form parameter, not yet encoded (each tool encodes them):
- * repeated names for exploded arrays and for Swagger's `multi`, `name[key]` for deepObject.
+ * Name–value pairs of a query, cookie or form parameter: repeated names for exploded arrays and
+ * for Swagger's `multi`, `name[key]` for deepObject. Without `encode` the text is not yet encoded
+ * (each tool encodes it). With it, every item is encoded before items are joined, so only the
+ * separators stay literal (RFC 6570: `a,b%2Cc` for ['a', 'b,c']); names are left to the caller.
  */
-export function styledPairs(p: ParamStyle, value: unknown): [string, string][] {
+export function styledPairs(p: ParamStyle, value: unknown, encode?: (text: string) => string, report?: StyleReport): [string, string][] {
+  if (p.style === 'deepObject' && !p.json && value !== null && typeof value === 'object') return deepPairs(p.name, value, encode ?? ((text) => text), report)
   const shape = shapeOf(p, value)
   const name = p.name
-  if (shape.kind === 'value') return [[name, shape.text]]
+  const enc = encode ?? ((text: string) => text)
+  if (shape.kind === 'value') return [[name, enc(shape.text)]]
+  const join = (items: string[], separator: string, encoded = separator) => {
+    if (report && items.length > 1 && (separator === ',' || separator === '|')) report.joined = true
+    return items.map(enc).join(encode ? encoded : separator)
+  }
   if (p.style === undefined) {
     // Swagger 2.0 has arrays only.
     const items = shape.kind === 'array' ? shape.items : flat(shape.entries)
-    if (p.collectionFormat === 'multi') return items.map((item) => [name, item])
-    return [[name, items.join(SEPARATORS[p.collectionFormat ?? 'csv'] ?? ',')]]
+    if (p.collectionFormat === 'multi') return items.map((item) => [name, enc(item)])
+    const separator = SEPARATORS[p.collectionFormat ?? 'csv'] ?? ','
+    return [[name, join(items, separator, separator === ' ' ? '%20' : separator === '\t' ? '%09' : separator)]]
   }
-  if (p.style === 'deepObject' && shape.kind === 'object') return shape.entries.map(([key, v]) => [`${name}[${key}]`, v])
-  if (explodes(p)) return shape.kind === 'array' ? shape.items.map((item) => [name, item]) : shape.entries
+  if (explodes(p)) return shape.kind === 'array' ? shape.items.map((item) => [name, enc(item)]) : shape.entries.map(([key, v]) => [key, enc(v)])
   const separator = p.style === 'spaceDelimited' ? ' ' : p.style === 'pipeDelimited' ? '|' : ','
-  return [[name, (shape.kind === 'array' ? shape.items : flat(shape.entries)).join(separator)]]
+  return [[name, join(shape.kind === 'array' ? shape.items : flat(shape.entries), separator, separator === ' ' ? '%20' : separator)]]
+}
+
+/**
+ * deepObject: `name[key]=value` for each property. Deeper objects continue as `name[a][b]` and
+ * arrays as `name[]` (or `name[0][key]` for arrays of objects), the common form; OpenAPI defines
+ * only the first level, so `report.deep` says when more was needed.
+ */
+function deepPairs(name: string, value: object, encode: (text: string) => string, report?: StyleReport): [string, string][] {
+  const out: [string, string][] = []
+  const walk = (prefix: string, v: unknown, depth: number) => {
+    if (out.length >= MAX_ITEMS * 4) return
+    if (Array.isArray(v)) {
+      if (report) report.deep = true
+      const nested = v.some((item) => item !== null && typeof item === 'object')
+      v.slice(0, MAX_ITEMS).forEach((item, index) => walk(`${prefix}[${nested ? index : ''}]`, item, depth + 1))
+    } else if (v !== null && typeof v === 'object' && depth < 8) {
+      if (depth > 0 && report) report.deep = true
+      for (const key of Object.keys(v).slice(0, MAX_ITEMS)) walk(`${prefix}[${key}]`, (v as Record<string, unknown>)[key], depth + 1)
+    } else out.push([prefix, encode(memberText(v))])
+  }
+  walk(name, value, 0)
+  return out
 }
 
 /** A path parameter's text in the URL (simple, label or matrix style), each part encoded. */
