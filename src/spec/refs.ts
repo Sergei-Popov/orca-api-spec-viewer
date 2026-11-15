@@ -295,7 +295,7 @@ export class Refs {
     const root = this.docs.get(doc)
     // OpenAPI 3.2: `$self` is the document's URI. Other files get one under the placeholder.
     const self = isObject(root) && typeof root.$self === 'string' ? root.$self : undefined
-    const fallback = doc === '' ? PLACEHOLDER_BASE : new URL(encodeURIComponent(doc), PLACEHOLDER_BASE).href
+    const fallback = doc === '' ? PLACEHOLDER_BASE : new URL(encodeName(doc), PLACEHOLDER_BASE).href
     const base = (self !== undefined ? resolveUri(self, fallback) : null) ?? fallback
     index = { base, self: base !== fallback, ids: new Map(), rawIds: new Map(), anchors: new Map(), anchorNames: new Map(), dynamicAnchors: new Map(), dynamicAnchorNames: new Map(), resources: new Map() }
     index.resources.set('', { path: [], base })
@@ -486,6 +486,15 @@ function resolveUri(uri: string, base: string): string | null {
 /** Whether a URI names the document itself (its query aside). */
 function sameDocument(uri: string, base: string): boolean {
   return uri === base || uri.split('?')[0] === base.split('?')[0]
+}
+
+/** A file name as one URI segment; half of a UTF-16 pair, which cannot be encoded, becomes U+FFFD. */
+function encodeName(name: string): string {
+  try {
+    return encodeURIComponent(name)
+  } catch {
+    return encodeURIComponent(name.replace(/[\ud800-\udfff]/g, '\ufffd'))
+  }
 }
 
 function decodeFragment(text: string): string {

@@ -245,3 +245,9 @@ components:
   // A default value is data: a $id in it names nothing.
   assert.equal(a.refs.resolve('https://example.com/schemas/not-a-schema').kind, 'external')
 })
+
+test('a loaded file whose name has half of a UTF-16 pair still resolves', () => {
+  const refs = new Refs({ components: {} })
+  const key = refs.addDocument('pet' + String.fromCharCode(0xd83d) + '.yaml', { Pet: { type: 'object' } })
+  assert.equal(refs.resolve(key + '#/Pet').kind, 'local')
+})

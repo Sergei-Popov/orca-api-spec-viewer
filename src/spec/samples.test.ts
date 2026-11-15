@@ -477,17 +477,33 @@ test('an unpaired surrogate in a value becomes U+FFFD with a note, never an erro
           responses: { 200: { description: 'ok' } }
         }
       },
-      '/ok/{id}': { get: { parameters: [{ name: 'id', in: 'path', required: true, example: '\u{1F600}' }], responses: { 200: { description: 'ok' } } } }
+      '/ok/{id}': { get: { parameters: [{ name: 'id', in: 'path', required: true, example: '\u{1F600}' }], responses: { 200: { description: 'ok' } } } },
+      '/items': {
+        post: {
+          requestBody: { content: { 'application/json': { example: { ['k' + half]: 'v' + String.fromCharCode(0xde00), list: [half] } } } },
+          responses: { 200: { description: 'ok' } }
+        }
+      }
     }
   })
   const broken = one(spec, '/items/{id}')
   assert.equal(broken.replaced, true)
   assert.equal(broken.url, 'https://api.test/items/%EF%BF%BD')
-  for (const language of sampleLanguages(broken)) {
-    const sample = renderSample(language, broken)
-    assert.equal(wellFormed(sample), sample, language)
+  // Neither the half itself nor an escape of it (`\ud83d`, which JSON and Python would send on).
+  const escaped = /\\u[dD][89a-fA-F][0-9a-fA-F]{2}/
+  for (const request of [broken, one(spec, '/items')]) {
+    for (const language of sampleLanguages(request)) {
+      const sample = renderSample(language, request)
+      assert.equal(wellFormed(sample), sample, language)
+      assert.ok(!escaped.test(sample), `${language}: ${sample}`)
+    }
   }
   assert.match(renderSample('curl', broken), /q%EF%BF%BD=x%EF%BF%BD/)
+  assert.match(renderSample('python', broken), /params=\{"q\ufffd": "x\ufffd"\}/)
+  assert.match(renderSample('python', broken), /"X-Note": "a\ufffd"/)
+  const body = one(spec, '/items')
+  assert.equal(body.replaced, true)
+  assert.deepEqual(body.body?.json, { ['k' + '\ufffd']: 'v\ufffd', list: ['\ufffd'] })
   const fine = one(spec, '/ok/{id}')
   assert.equal(fine.replaced, undefined)
   assert.equal(fine.url, 'https://api.test/ok/%F0%9F%98%80')

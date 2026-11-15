@@ -168,8 +168,32 @@ export function buildRequest(model: OpenApiModel, refs: Refs, op: Operation, det
   })
   if (placeholders.length > 0) request.placeholders = placeholders
   if (queryString) request.url += (request.url.includes('?') ? '&' : '?') + queryString
-  if ([request.url, request.query, request.headers, request.body].some((v) => illFormed(v))) request.replaced = true
+  if ([request.url, request.query, request.headers, request.body].some((v) => illFormed(v))) {
+    // Replaced in the request itself, so no language writes the half as an escape (`\ud83d` in
+    // JSON or Python), which would send it on.
+    request.replaced = true
+    request.url = wellFormed(request.url)
+    request.query = request.query.map(([name, value]) => [wellFormed(name), wellFormed(value)])
+    request.headers = request.headers.map(([name, value]) => [wellFormed(name), wellFormed(value)])
+    if (request.placeholders) request.placeholders = request.placeholders.map(wellFormed)
+    const body = request.body
+    if (body?.text !== undefined) body.text = wellFormed(body.text)
+    if (body?.form) body.form = body.form.map((field) => ({ ...field, name: wellFormed(field.name), value: wellFormed(field.value) }))
+    if (body && body.json !== undefined) body.json = wellFormedValue(body.json)
+  }
   return request
+}
+
+/** A JSON value with every string and key well formed (see wellFormed). */
+function wellFormedValue(value: unknown, depth = 0, active = new WeakSet<object>()): unknown {
+  if (typeof value === 'string') return wellFormed(value)
+  if (value === null || typeof value !== 'object' || depth > 500 || active.has(value)) return value
+  active.add(value)
+  const out = Array.isArray(value)
+    ? value.map((item) => wellFormedValue(item, depth + 1, active))
+    : Object.fromEntries(Object.entries(value).map(([key, item]) => [wellFormed(key), wellFormedValue(item, depth + 1, active)]))
+  active.delete(value)
+  return out
 }
 
 /**
