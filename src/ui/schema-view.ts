@@ -56,6 +56,17 @@ export function typeText(ctx: PageCtx, schema: unknown, loc: Loc, depth = 0): st
   const types = schemaTypes(schema)
   if (types.includes('array') && depth < 3) {
     const items = own(schema, 'items')
+    if (items === false) {
+      // No items past prefixItems: a tuple of exactly those (or an always-empty array), never any.
+      const prefix = own(schema, 'prefixItems')
+      const list = Array.isArray(prefix) ? prefix : []
+      const parts = list.slice(0, MAX_VARIANTS).map((item, i) => {
+        const r = refOf(item)
+        return r ? refName(r.ref) : typeText(ctx, item, child(loc, 'prefixItems', String(i)), depth + 1) || ctx.t.any
+      })
+      const tuple = `[${parts.join(', ')}${list.length > MAX_VARIANTS ? ', …' : ''}]`
+      return types.map((t) => (t === 'array' ? tuple : t)).join(' | ')
+    }
     if (items !== undefined && !Array.isArray(items)) {
       const r = refOf(items)
       const inner = r ? refName(r.ref) : typeText(ctx, items, child(loc, 'items'), depth + 1) || ctx.t.any

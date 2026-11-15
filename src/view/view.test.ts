@@ -230,9 +230,15 @@ webhooks:
   assert.ok(hooks[0].match.includes('pull-request-opened'))
 })
 
-test('a long summary is cut to its first line, sentence or 120 characters', () => {
+test('a long summary is cut to its first paragraph, sentence or 120 characters', () => {
   assert.equal(shortSummary('List pets'), 'List pets')
-  assert.equal(shortSummary('  First line\nsecond line'), 'First line')
+  // Before: a summary YAML folded was cut where the source wrapped, mid-sentence and with no "…".
+  assert.equal(shortSummary('  First line\nsecond line'), 'First line second line')
+  assert.equal(shortSummary('Modify a stored chat completion. Only Chat Completions that have been\ncreated with the store parameter can be modified, deleted or listed later on.'), 'Modify a stored chat completion.')
+  assert.equal(shortSummary('Creates an intermediate Upload object\n\nthat you can add Parts to.'), 'Creates an intermediate Upload object…')
+  assert.equal(shortSummary('This event occurs on a pull request.\n\nFor more information, see the docs.'), 'This event occurs on a pull request.')
+  assert.equal(shortSummary('**Starting a new project?** Use `responses` instead'), 'Starting a new project? Use responses instead')
+  assert.equal(shortSummary('Keeps 2 * 3 * 4 and __proto__ as they are'), 'Keeps 2 * 3 * 4 and __proto__ as they are')
   assert.equal(shortSummary('See [the guide](https://example.com/guide) for more'), 'See the guide for more')
   assert.equal(shortSummary('Keeps [brackets] and (parens) as they are'), 'Keeps [brackets] and (parens) as they are')
   const words = 'word '.repeat(40).trim()

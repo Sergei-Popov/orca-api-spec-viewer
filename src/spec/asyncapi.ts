@@ -394,11 +394,11 @@ export function infoOf(root: Record<string, unknown>): Record<string, unknown> {
  * Format Schema Object, or a 2.x message's own, traits applied), and whether it is shown as
  * source because that format is not a JSON Schema (Avro, Protobuf, RAML…).
  */
-export function messagePayload(message: Record<string, unknown>, loc: Loc, family: Family): { value: unknown; loc: Loc; format?: string; source: boolean } | undefined {
+export function messagePayload(message: Record<string, unknown>, loc: Loc, family: Family, refs?: Refs): { value: unknown; loc: Loc; format?: string; source: boolean } | undefined {
   const raw = own(message, 'payload')
   if (raw === undefined) return undefined
   const at: Loc = { doc: loc.doc, path: [...loc.path, 'payload'] }
-  const multi = family === 'asyncapi3' ? schemaWithFormat(raw, at) : undefined
+  const multi = family === 'asyncapi3' ? (refs ? followedSchemaWithFormat(refs, raw, at) : schemaWithFormat(raw, at)) : undefined
   if (multi) return multi
   const format = family === 'asyncapi2' ? str(own(message, 'schemaFormat')) : undefined
   return { value: raw, loc: at, format, source: !isJsonSchemaFormat(format) }
@@ -408,4 +408,16 @@ export function messagePayload(message: Record<string, unknown>, loc: Loc, famil
 export function schemaWithFormat(value: unknown, loc: Loc): { value: unknown; loc: Loc; format: string; source: boolean } | undefined {
   if (!isObject(value) || typeof value.schemaFormat !== 'string' || own(value, 'schema') === undefined) return undefined
   return { value: own(value, 'schema'), loc: { doc: loc.doc, path: [...loc.path, 'schema'] }, format: value.schemaFormat, source: !isJsonSchemaFormat(value.schemaFormat) }
+}
+
+/**
+ * schemaWithFormat through a `$ref` too: AsyncAPI 3 documents (the OpenAPI converter's among them)
+ * put Multi Format Schema Objects in components.schemas and refer to them from payloads and
+ * headers. A reference to a plain schema gives undefined, so it is drawn as the reference it is.
+ */
+export function followedSchemaWithFormat(refs: Refs, value: unknown, loc: Loc): ReturnType<typeof schemaWithFormat> {
+  const direct = schemaWithFormat(value, loc)
+  if (direct || !refOf(value)) return direct
+  const followed = refs.follow(value, loc)
+  return followed.stop ? undefined : schemaWithFormat(followed.value, followed.loc)
 }

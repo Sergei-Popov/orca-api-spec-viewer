@@ -104,15 +104,45 @@ Kubernetes manifest, a `package.json`, a Swagger 1.x file, and so on).
   (or a drop), external refs stay listed as links.
 - **YAML and JSON messages** come from the parsers and are in English in both languages.
 - **Code samples** never throw and never quietly differ from the document: where a client cannot
-  send something as written, the sample leaves it out and says so under the samples. That
-  covers a body on GET in `fetch` and on HEAD in curl (`-I`), header values outside ASCII in
-  `fetch` and Python `requests`, header names that are not HTTP tokens and values with a line
-  break, a part's own `Content-Type` or headers from the Encoding Object, line breaks in
-  `fetch` multipart text (FormData sends CRLF), a `.` or `..` path value outside curl, a Cookie
-  header in browsers, and multipart names curl or HTTPie cannot write. `deepObject` values
-  nested deeper than OpenAPI defines use the common `name[key][0]=value` form, and a sequence
-  body (`itemSchema`) sends one generated item. OpenAPI 3.0 bodies on GET, HEAD and DELETE are
-  left out, since the specification has consumers ignore them.
+  send something as written, the sample leaves it out or sends what it can, and says so under the
+  samples. That covers:
+  - a body on GET in `fetch` and on HEAD in curl (`-I`);
+  - TRACE, TRACK and CONNECT in `fetch`, which forbids them;
+  - methods not in capitals in Python `requests` and HTTPie, which send them in capitals;
+  - headers the HTTP client sets itself (Content-Length, Transfer-Encoding, Host, Connection,
+    Keep-Alive, TE, Trailer, Upgrade, Expect), in every sample;
+  - header values outside ASCII in `fetch` and Python `requests`;
+  - header names that are not HTTP tokens, and values with a line break;
+  - Cookie and the other headers browsers do not let `fetch` set;
+  - a part's own `Content-Type` or headers from the Encoding Object, files included;
+  - line breaks in `fetch` multipart text (FormData sends CRLF);
+  - a `.` or `..` path value outside curl;
+  - multipart names curl or HTTPie cannot write;
+  - `pipeDelimited` items that hold a `|`, which Python `requests` and HTTPie encode like the
+    separators.
+
+  `deepObject` values nested deeper than OpenAPI defines use the common forms: `name[a][b]=value`
+  for nested objects, `name[key][]=value` for lists of values and `name[key][0][field]=value`
+  for lists of objects. A sequence body (`itemSchema`) sends one generated item. A required
+  multipart body whose schema names no parts (an array of files, say) sends one file part named
+  `file`, and a urlencoded one sends no body. OpenAPI 3.0 bodies on GET, HEAD and DELETE are left
+  out, since the specification has consumers ignore them. File parts use `file.bin` (curl,
+  Python, HTTPie) and a file `<input>` (JavaScript) as stand-ins, and the samples say so.
+- **Checks not made yet:**
+  - `example` and `default` values are checked against `type` only, not against `enum` or
+    bounds;
+  - in OpenAPI 3.1, a `$ref`'s sibling `example` or `default` is not checked against the target,
+    and a sibling `enum` or `type` that leaves no valid value is not reported;
+  - links in `components.responses` are not checked for a missing `operationId`;
+  - AsyncAPI `components.securitySchemes` entries that are `$ref`s are neither checked nor
+    counted as uses;
+  - an OpenAPI 3.2 security requirement that names another kind of object by URI is accepted.
+
+  In `x-` extensions and AsyncAPI bindings, a `$ref` under a property named `default`, `enum`,
+  `example` or `const` is read as data. So an `x-webhooks` `responses.default` reference does not
+  count as a use.
+- **Composition rows:** a schema with both `allOf` and `oneOf` shows only the `oneOf` variants as
+  its type. In a multipart body, a file property inside `allOf` or `oneOf` is sent as text.
 - **`$ref` siblings** (OpenAPI 3.1+): bounds, `enum`, `type`, `required` and `properties` are
   combined with the target's; for other keywords both have, such as `pattern` or `format`, both
   apply and the target's is shown.

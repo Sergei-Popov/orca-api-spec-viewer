@@ -4,6 +4,7 @@
 import type { ArazzoModel } from '../spec/arazzo'
 import type { AsyncApiModel } from '../spec/asyncapi'
 import { componentsPath, pathTemplateNames, requirementScheme, serverList, tagParentCycles, type OpenApiModel, type Operation } from '../spec/openapi'
+import { callbacksOf } from '../spec/operation'
 import { getAt, isObject, own, str, toPointer } from '../spec/pointer'
 import { locKey, MAX_HOPS, refOf, type Refs } from '../spec/refs'
 import type { WalkContext } from './walker'
@@ -96,7 +97,16 @@ export function addSecurityUses(used: Usages, refs: Refs, model: { kind: 'openap
       return found.kind === 'local' && found.loc.doc === '' ? found.loc.path.slice() : null
     }
     requirements(own(m.root, 'security'), ['security'], scheme)
-    for (const op of [...m.operations, ...m.webhooks]) requirements(own(op.op, 'security'), [...op.loc.path, 'security'], scheme)
+    // Callback operations too, nested ones included; one shared by reference counts once.
+    const seen = new Set<string>()
+    const visit = (op: Operation, depth: number) => {
+      const key = locKey(op.loc)
+      if (seen.has(key)) return
+      seen.add(key)
+      requirements(own(op.op, 'security'), [...op.loc.path, 'security'], scheme)
+      if (depth < 8) for (const callback of callbacksOf(refs, op, m.family)) for (const inner of callback.operations) visit(inner, depth + 1)
+    }
+    for (const op of [...m.operations, ...m.webhooks]) visit(op, 0)
     return
   }
   const m = model.model

@@ -404,7 +404,7 @@ function linksOf(refs: Refs, links: unknown, at: Loc): LinkView[] {
   })
 }
 
-function callbacksOf(refs: Refs, op: Operation, family: Family): CallbackView[] {
+export function callbacksOf(refs: Refs, op: Operation, family: Family): CallbackView[] {
   const callbacks = own(op.op, 'callbacks')
   if (family === 'swagger2' || !isObject(callbacks)) return []
   const out: CallbackView[] = []

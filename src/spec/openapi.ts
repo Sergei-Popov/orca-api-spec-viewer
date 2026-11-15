@@ -456,14 +456,24 @@ export function pathTemplateNames(route: string): string[] {
 }
 
 /**
- * A summary short enough for a row or a title: its first line, Markdown links as their text, and
- * if that is still long, its first sentence or the first 120 characters. Summaries should be
- * short, but some documents (GitHub's webhooks) put paragraphs with links there.
+ * A summary short enough for a row or a title: its first paragraph as one line (YAML folds long
+ * text at line breaks that are not the author's), Markdown links as their text and bold or code
+ * marks dropped, and if that is still long, its first sentence or the first 120 characters.
+ * Summaries should be short, but some documents (GitHub's webhooks, OpenAI's) put paragraphs
+ * there. Text cut anywhere but at the end of a sentence ends with "…".
  */
 export function shortSummary(text: string | undefined): string {
   if (!text) return ''
-  const line = text.trim().split(/\r?\n/)[0].trim().replace(/!?\[([^\]\n]*)\]\([^()\s]*\)/g, '$1')
-  if (line.length <= 120) return line
+  const whole = text.trim()
+  const paragraph = whole.split(/\r?\n[ \t]*\r?\n/)[0]
+  const line = paragraph
+    .split(/\r?\n/)
+    .map((part) => part.trim())
+    .join(' ')
+    .replace(/!?\[([^\]\n]*)\]\([^()\s]*\)/g, '$1')
+    .replace(/\*\*(\S(?:[^*\n]*\S)?)\*\*/g, '$1')
+    .replace(/`([^`\n]+)`/g, '$1')
+  if (line.length <= 120) return paragraph.length < whole.length && !/[.!?:…]$/.test(line) ? line + '…' : line
   const sentence = /^(.{20,119}?[.!?])\s/.exec(line)
   return sentence ? sentence[1] : line.slice(0, 119).trimEnd() + '…'
 }

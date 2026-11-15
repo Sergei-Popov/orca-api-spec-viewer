@@ -186,3 +186,24 @@ components:
   assert.deepEqual(show('X-Own'), [['text/plain', 'string', undefined]])
   assert.deepEqual(contentRows(details.params[0]).map((row) => row.example?.value), [{ q: 1 }])
 })
+
+test('an array with items: false is a closed tuple or an empty array, not array<any>', () => {
+  const spec = `openapi: 3.1.0
+info: { title: T, version: '1' }
+paths: {}
+components:
+  schemas:
+    Pair: { type: array, prefixItems: [{ type: string }, { $ref: '#/components/schemas/Pair' }], items: false }
+    Empty: { type: [array, 'null'], items: false }
+    Open: { type: array, prefixItems: [{ type: string }] }
+`
+  const a = analyze(spec)
+  const ctx = { t: stringsFor('en'), refs: a.refs } as unknown as PageCtx
+  const type = (name: string) => {
+    const path = ['components', 'schemas', name]
+    return typeText(ctx, getAt(a.parsed.value, path), { doc: '', path })
+  }
+  assert.equal(type('Pair'), '[string, Pair]')
+  assert.equal(type('Empty'), '[] | null')
+  assert.equal(type('Open'), 'array')
+})

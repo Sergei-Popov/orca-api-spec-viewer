@@ -24,7 +24,7 @@ const SEPARATORS: Record<string, string> = { csv: ',', ssv: ' ', tsv: '\t', pipe
 
 /** One member of an array or object: nested values stay compact JSON. */
 function memberText(value: unknown): string {
-  return value !== null && typeof value === 'object' ? jsonText(value, { maxLength: 4000 }).text : String(value)
+  return value !== null && typeof value === 'object' ? jsonText(value, { maxLength: 4000, wellFormed: true }).text : String(value)
 }
 
 function shapeOf(p: ParamStyle, value: unknown): Shape {
@@ -46,6 +46,8 @@ export interface StyleReport {
   joined?: boolean
   /** deepObject met an array or a nested object, which OpenAPI does not define. */
   deep?: boolean
+  /** A pipeDelimited item holds `|`, which only its encoding (%7C) tells from the separator. */
+  pipeInItem?: boolean
 }
 
 /**
@@ -62,6 +64,7 @@ export function styledPairs(p: ParamStyle, value: unknown, encode?: (text: strin
   if (shape.kind === 'value') return [[name, enc(shape.text)]]
   const join = (items: string[], separator: string, encoded = separator) => {
     if (report && items.length > 1 && (separator === ',' || separator === '|')) report.joined = true
+    if (report && items.length > 1 && separator === '|' && items.some((item) => item.includes('|'))) report.pipeInItem = true
     return items.map(enc).join(encode ? encoded : separator)
   }
   if (p.style === undefined) {
