@@ -87,7 +87,7 @@ test('HTML is dropped to its text; br breaks lines; entities decode', () => {
     { t: 'br' },
     { t: 'text', v: 'b bold  & © © A &bogus;' }
   ])
-  assert.deepEqual(p('<div class="x">\n<p>Hello <script>evil()</script>world</p>\n</div>'), [{ t: 'p', c: [{ t: 'text', v: 'Hello world' }] }])
+  assert.deepEqual(p('<div class="x">\n<p>Hello <script>run()</script>world</p>\n</div>'), [{ t: 'p', c: [{ t: 'text', v: 'Hello world' }] }])
   assert.deepEqual(p('<details><summary>More</summary>\nHidden **text**\n</details>'), [
     { t: 'p', c: [{ t: 'text', v: 'More' }] },
     { t: 'p', c: [{ t: 'text', v: 'Hidden ' }, { t: 'strong', c: [{ t: 'text', v: 'text' }] }] }
