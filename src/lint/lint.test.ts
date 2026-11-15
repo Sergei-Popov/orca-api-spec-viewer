@@ -225,3 +225,38 @@ test('syntax problems keep their parser wording and line', () => {
   assert.ok(syntax.length > 0)
   assert.ok(syntax[0].text && syntax[0].text.length > 0)
 })
+
+test('Arazzo inputs are JSON Schema 2020-12: boolean schemas, type arrays, const and prefixItems', () => {
+  assert.deepEqual(
+    rules(`arazzo: 1.0.1
+info: { title: T, version: "1" }
+sourceDescriptions: [{ name: api, url: ./openapi.yaml, type: openapi }]
+workflows:
+  - workflowId: w
+    inputs:
+      type: object
+      properties:
+        a: true
+        b: false
+        c: { type: array, prefixItems: [{ type: string }], items: false }
+        d: { type: [string, 'null'], const: x }
+        customer:
+          oneOf:
+            - { type: object, properties: { name: { type: string } }, additionalProperties: false }
+    steps:
+      - { stepId: s1, operationId: getPet }
+`),
+    []
+  )
+  // OpenAPI 3.0 keeps its own rules.
+  assert.deepEqual(
+    rules(`openapi: 3.0.3
+info: { title: T, version: "1" }
+paths: {}
+components:
+  schemas:
+    S: { type: object, properties: { a: true } }
+`),
+    ['wrong-type@6']
+  )
+})

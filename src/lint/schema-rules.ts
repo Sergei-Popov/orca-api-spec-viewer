@@ -39,6 +39,15 @@ const MODERN_ONLY = [
 ]
 const NOT_IN_SWAGGER2 = ['oneOf', 'anyOf', 'not', 'nullable', 'deprecated', 'writeOnly']
 
+/**
+ * The version level whose schema rules apply: Arazzo and Overlay use JSON Schema 2020-12, the
+ * dialect of OpenAPI 3.1, so their schemas are checked as 3.1 schemas (boolean schemas, type
+ * arrays, `const`, `prefixItems`).
+ */
+function schemaLevel(ctx: WalkContext): number {
+  return ctx.family === 'arazzo1' || ctx.family === 'overlay1' ? 31 : ctx.level
+}
+
 export function checkSchemas(ctx: WalkContext): void {
   const seen = new WeakSet<object>()
   const stack = ctx.schemas.map((s) => ({ value: s.value, path: s.path, depth: 0, paramLike: s.paramLike === true }))
@@ -48,7 +57,7 @@ export function checkSchemas(ctx: WalkContext): void {
     const { value, path, depth, paramLike } = stack.pop()!
     if (value === undefined) continue
     if (typeof value === 'boolean') {
-      if (ctx.level < 31) ctx.problems.error('wrong-type', path, { expected: 'object', actual: 'boolean' })
+      if (schemaLevel(ctx) < 31) ctx.problems.error('wrong-type', path, { expected: 'object', actual: 'boolean' })
       continue
     }
     if (!isObject(value)) {
@@ -69,8 +78,8 @@ interface Child {
 
 /** Checks one schema object and returns its child schemas. */
 function checkOne(schema: Record<string, unknown>, path: string[], ctx: WalkContext, paramLike: boolean): Child[] {
-  const modern = ctx.level >= 31
-  const old = ctx.level < 31
+  const modern = schemaLevel(ctx) >= 31
+  const old = schemaLevel(ctx) < 31
   const ref = own(schema, '$ref')
   if (typeof ref === 'string') {
     ctx.refs.push({ ref, path: [...path, '$ref'] })
@@ -86,21 +95,22 @@ function checkOne(schema: Record<string, unknown>, path: string[], ctx: WalkCont
 
   if (old) {
     for (const keyword of MODERN_ONLY) {
-      if (Object.prototype.hasOwnProperty.call(schema, keyword)) ctx.problems.warn('schema-keyword', [...path, keyword], { keyword, version: ctx.level === 20 ? 'Swagger 2.0' : 'OpenAPI 3.0' })
+      if (Object.prototype.hasOwnProperty.call(schema, keyword)) ctx.problems.warn('schema-keyword', [...path, keyword], { keyword, version: schemaLevel(ctx) === 20 ? 'Swagger 2.0' : 'OpenAPI 3.0' })
     }
   }
-  if (ctx.level === 20) {
+  if (schemaLevel(ctx) === 20) {
     for (const keyword of NOT_IN_SWAGGER2) {
       if (Object.prototype.hasOwnProperty.call(schema, keyword)) ctx.problems.warn('schema-keyword', [...path, keyword], { keyword, version: 'Swagger 2.0' })
     }
   }
-  if (modern && ctx.level < 100 && Object.prototype.hasOwnProperty.call(schema, 'nullable')) {
+  // `nullable` is OpenAPI 3.0's; Arazzo and Overlay never had it, so it is only an unknown keyword there.
+  if (modern && ctx.level >= 31 && ctx.level < 100 && Object.prototype.hasOwnProperty.call(schema, 'nullable')) {
     ctx.problems.warn('schema-keyword', [...path, 'nullable'], { keyword: 'nullable', version: ctx.level === 31 ? 'OpenAPI 3.1' : 'OpenAPI 3.2' })
   }
 
   // type
   const type = own(schema, 'type')
-  const validTypes = ctx.level === 20 ? [...TYPES_OLD, 'file'] : old ? TYPES_OLD : TYPES_NEW
+  const validTypes = schemaLevel(ctx) === 20 ? [...TYPES_OLD, 'file'] : old ? TYPES_OLD : TYPES_NEW
   if (Array.isArray(type)) {
     if (old) ctx.problems.error('wrong-type', [...path, 'type'], { expected: 'string', actual: 'array' })
     for (const t of type) if (typeof t !== 'string' || !TYPES_NEW.includes(t)) ctx.problems.error('bad-value', [...path, 'type'], { value: String(t), allowed: TYPES_NEW.join(', ') })
@@ -257,7 +267,7 @@ function checkValues(schema: Record<string, unknown>, path: string[], ctx: WalkC
     if (!fitsTypes(value, types) && !(value === null && nullable)) ctx.problems.warn('invalid-example', [...path, 'example'], { value: show(value), type: types.join(' | ') })
   }
   const examples = own(schema, 'examples')
-  if (Array.isArray(examples) && ctx.level >= 31) {
+  if (Array.isArray(examples) && schemaLevel(ctx) >= 31) {
     examples.forEach((value, index) => {
       if (!fitsTypes(value, types)) ctx.problems.warn('invalid-example', [...path, 'examples', String(index)], { value: show(value), type: types.join(' | ') })
     })
@@ -266,7 +276,7 @@ function checkValues(schema: Record<string, unknown>, path: string[], ctx: WalkC
 
 function checkDiscriminator(schema: Record<string, unknown>, discriminator: unknown, path: string[], ctx: WalkContext): void {
   const at = [...path, 'discriminator']
-  if (ctx.level === 20) {
+  if (schemaLevel(ctx) === 20) {
     if (typeof discriminator !== 'string') ctx.problems.error('wrong-type', at, { expected: 'string', actual: typeof discriminator })
     return
   }
@@ -324,7 +334,7 @@ function childrenOf(schema: Record<string, unknown>, path: string[], ctx: WalkCo
   if (Array.isArray(prefixItems)) prefixItems.forEach((item, index) => add(item, 'prefixItems', String(index)))
   const items = own(schema, 'items')
   if (Array.isArray(items)) {
-    if (ctx.level < 100) ctx.problems.error('wrong-type', [...path, 'items'], { expected: 'object', actual: 'array' })
+    if (schemaLevel(ctx) < 100) ctx.problems.error('wrong-type', [...path, 'items'], { expected: 'object', actual: 'array' })
     items.forEach((item, index) => add(item, 'items', String(index)))
   } else if (items !== undefined) add(items, 'items')
   for (const key of ['additionalProperties', 'additionalItems', 'unevaluatedProperties', 'unevaluatedItems']) {
