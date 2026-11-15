@@ -1,6 +1,6 @@
 // The object tables of AsyncAPI 2.x and 3.x, Arazzo 1.x and Overlay 1.x.
 
-import { isObject, own, str } from '../spec/pointer'
+import { fragmentToPath, getAt, isObject, own, str } from '../spec/pointer'
 import { formatLevel } from './schema-rules'
 import { visit, type FieldType, type ObjectDef, type WalkContext } from './walker'
 
@@ -37,6 +37,25 @@ const commonInfo = {
 } as const
 
 /** AsyncAPI 2.x. */
+/**
+ * A 2.x message's schemaFormat with its traits applied: each trait is a merge patch over the
+ * message, so the last trait that sets one wins. Traits are followed through local references.
+ */
+function messageSchemaFormat(message: Record<string, unknown>, ctx: WalkContext): string | undefined {
+  let format = str(own(message, 'schemaFormat'))
+  const traits = own(message, 'traits')
+  if (!Array.isArray(traits)) return format
+  for (const trait of traits.slice(0, 50)) {
+    let value: unknown = trait
+    for (let hop = 0; hop < 10 && isObject(value) && typeof value.$ref === 'string' && value.$ref.startsWith('#'); hop++) {
+      const path = fragmentToPath(value.$ref)
+      value = path === null ? undefined : getAt(ctx.root, path)
+    }
+    if (isObject(value)) format = str(own(value, 'schemaFormat')) ?? format
+  }
+  return format
+}
+
 export function asyncApi2Defs(): Record<string, ObjectDef> {
   return {
     Root: {
@@ -125,7 +144,7 @@ export function asyncApi2Defs(): Record<string, ObjectDef> {
         // The payload is in the message's schemaFormat (AsyncAPI's own by default).
         const payload = own(value, 'payload')
         if (payload === undefined) return
-        const format = str(own(value, 'schemaFormat'))
+        const format = messageSchemaFormat(value, ctx)
         const level = format === undefined ? ctx.level : formatLevel(format, ctx.level)
         if (level !== null) ctx.schemas.push({ value: payload, path: [...path, 'payload'], level })
         else if (isObject(payload) && typeof payload.$ref === 'string') ctx.refs.push({ ref: payload.$ref, path: [...path, 'payload', '$ref'] })
@@ -204,7 +223,7 @@ export function asyncApi3Defs(): Record<string, ObjectDef> {
         title: 'string',
         summary: 'string',
         variables: map(ref('ServerVariable')),
-        security: list('any'),
+        security: list(ref('SecurityScheme')),
         bindings: 'any',
         ...tagged
       },
@@ -241,7 +260,7 @@ export function asyncApi3Defs(): Record<string, ObjectDef> {
         title: 'string',
         summary: 'string',
         description: 'string',
-        security: list('any'),
+        security: list(ref('SecurityScheme')),
         bindings: 'any',
         traits: list(ref('OperationTrait')),
         messages: list(ref('Message')),
@@ -250,7 +269,9 @@ export function asyncApi3Defs(): Record<string, ObjectDef> {
       },
       required: ['action', 'channel']
     },
-    OperationTrait: { fields: { title: 'string', summary: 'string', description: 'string', security: list('any'), bindings: 'any', ...tagged } },
+    OperationTrait: { fields: { title: 'string', summary: 'string', description: 'string', security: list(ref('SecurityScheme')), bindings: 'any', ...tagged } },
+    // An inline scheme is not checked here; a reference to one is, and counts as its use.
+    SecurityScheme: { fields: {}, patterned: { type: 'any' } },
     Reply: { fields: { address: ref('ReplyAddress'), channel: ref('Channel'), messages: list(ref('Message')) } },
     ReplyAddress: { fields: { description: 'string', location: 'string' }, required: ['location'] },
     Message: {

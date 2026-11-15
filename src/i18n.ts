@@ -2,6 +2,7 @@
 // messages are templates over each rule's parameters (see src/lint/problem.ts).
 
 import type { Problem, RuleCode } from './lint/index'
+import type { SampleNoteKey } from './spec/samples'
 
 type Plural = (n: number) => string
 
@@ -209,7 +210,8 @@ const en = {
     'array of strings': 'array of strings',
     'non-negative integer': 'non-negative integer',
     'number > 0': 'number > 0',
-    'boolean or object': 'boolean or object'
+    'boolean or object': 'boolean or object',
+    'reference string': 'a string (in YAML, quote a $ref that starts with #: unquoted, the rest of the line is a comment)'
   } as Record<string, string>,
   emptyFile: 'the file is empty',
   codeSamples: 'Code samples',
@@ -220,6 +222,25 @@ const en = {
   samplesFillIn: 'Replace {names} with real values before you run a sample.',
   samplesNoShell: 'A name, header or value here holds a NUL, carriage return or line break, which a shell command cannot carry safely, so there are no curl or HTTPie samples.',
   samplesReplaced: 'A value here has a broken character (half of a UTF-16 pair); the samples show the replacement character U+FFFD in its place.',
+  /** Notes under the code samples: what a sample leaves out or cannot send as the document says. */
+  sampleNotes: {
+    bodyIgnored30: 'OpenAPI 3.0 says a request body on {method} is ignored, so the samples send none.',
+    bodyNoFetch: 'fetch cannot send a body with {method}, so this sample leaves it out.',
+    bodyNoHead: 'curl sends HEAD with -I, which takes no body, so this sample leaves it out.',
+    cookieFetch: 'Browsers do not let fetch set a Cookie header: this sample sends it only from Node.js or Deno.',
+    headerName: 'Left out of the samples, since a header name must be an HTTP token: {names}.',
+    headerValue: 'Left out of the samples, since HTTP cannot carry a header value with a line break, a NUL or spaces at its ends: {names}.',
+    headerAscii: 'Left out of this sample, since fetch and Python requests cannot send a header value outside ASCII as UTF-8, as curl and HTTPie do: {names}.',
+    dotSegment: 'A path segment here is “.” or “..”, written as %2E. fetch reads that as a step in the path and removes it, and Python requests and HTTPie send it as a plain dot, so only the curl sample sends the value as the document gives it.',
+    deepObject: 'OpenAPI defines deepObject for one level of an object. These values go deeper, so the samples write them in the common name[key][0]=value form: {names}.',
+    partType: 'Sent as plain text parts, since this sample cannot give a part a Content-Type of its own: {names}.',
+    partHeaders: 'The Encoding Object gives part headers, which the samples do not send, for: {names}.',
+    partLineBreaks: 'A text part here has a line break that is not CRLF; FormData sends every line break as CRLF, so this sample changes it.',
+    sequence: 'The body is a sequence of items; the samples send one, made from the item schema.',
+    noCurlField: 'There is no curl sample: curl cannot send a multipart field with an empty name or “=” in its name: {names}.',
+    noHttpieMethod: 'There is no HTTPie sample: HTTPie takes methods made of letters only, not {method}.',
+    noHttpieItems: 'There is no HTTPie sample: HTTPie cannot write these items exactly: {names}.'
+  } as Record<SampleNoteKey, string>,
   tryItNote: 'There is no “Try it out”: the view has no network.',
 
   type: 'Type',
@@ -587,7 +608,8 @@ const ru: Strings = {
     'array of strings': 'массив строк',
     'non-negative integer': 'неотрицательное целое число',
     'number > 0': 'число больше 0',
-    'boolean or object': 'boolean или object'
+    'boolean or object': 'boolean или object',
+    'reference string': 'строка (в YAML $ref, начинающийся с #, берут в кавычки: без них остаток строки — комментарий)'
   },
   emptyFile: 'файл пуст',
   codeSamples: 'Примеры кода',
@@ -598,6 +620,24 @@ const ru: Strings = {
   samplesFillIn: 'Перед запуском замените {names} настоящими значениями.',
   samplesNoShell: 'В имени, заголовке или значении есть символ NUL, возврат каретки или перевод строки: команда оболочки не может безопасно их передать, поэтому примеров curl и HTTPie нет.',
   samplesReplaced: 'В значении есть испорченный символ (половина пары UTF-16); в примерах вместо него стоит символ замены U+FFFD.',
+  sampleNotes: {
+    bodyIgnored30: 'По OpenAPI 3.0 тело запроса у {method} игнорируется, поэтому в примерах его нет.',
+    bodyNoFetch: 'fetch не может отправить тело с {method}, поэтому в этом примере его нет.',
+    bodyNoHead: 'curl отправляет HEAD с ключом -I, который не принимает тело, поэтому в этом примере его нет.',
+    cookieFetch: 'Браузеры не дают fetch задать заголовок Cookie: этот пример отправит его только из Node.js или Deno.',
+    headerName: 'В примерах пропущены заголовки, потому что имя заголовка должно быть токеном HTTP: {names}.',
+    headerValue: 'В примерах пропущены заголовки, потому что HTTP не передаёт значение заголовка с переводом строки, NUL или пробелами по краям: {names}.',
+    headerAscii: 'В этом примере пропущены заголовки, потому что fetch и Python requests не отправляют значение вне ASCII в UTF-8, как curl и HTTPie: {names}.',
+    dotSegment: 'Часть пути здесь — «.» или «..», она записана как %2E. fetch читает это как шаг пути и убирает его, а Python requests и HTTPie отправляют обычную точку, поэтому значение из документа отправляет только пример curl.',
+    deepObject: 'OpenAPI определяет deepObject для одного уровня объекта. Эти значения глубже, поэтому в примерах они записаны в распространённом виде name[key][0]=value: {names}.',
+    partType: 'Отправлены как простые текстовые части, потому что этот пример не может задать части свой Content-Type: {names}.',
+    partHeaders: 'Объект Encoding задаёт заголовки частей, которые примеры не отправляют: {names}.',
+    partLineBreaks: 'В текстовой части здесь перевод строки не CRLF; FormData отправляет любой перевод строки как CRLF, поэтому этот пример его меняет.',
+    sequence: 'Тело — последовательность элементов; примеры отправляют один, построенный по схеме элемента.',
+    noCurlField: 'Примера curl нет: curl не может отправить поле multipart с пустым именем или со знаком «=» в имени: {names}.',
+    noHttpieMethod: 'Примера HTTPie нет: HTTPie принимает только методы из букв, а не {method}.',
+    noHttpieItems: 'Примера HTTPie нет: эти элементы HTTPie не может записать точно: {names}.'
+  },
   tryItNote: 'Кнопки «Попробовать» нет: у представления нет сети.',
 
   type: 'Тип',

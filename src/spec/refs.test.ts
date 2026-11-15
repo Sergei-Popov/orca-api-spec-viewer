@@ -145,6 +145,37 @@ test('$id and $anchor are scoped by resource URI', () => {
   assert.ok(!a.problems.some((p) => p.rule === 'unresolved-ref' || p.rule === 'external-ref'), JSON.stringify(a.problems))
 })
 
+test('a resource without the anchor or $id never borrows another resource’s', () => {
+  // Before: D's `#node` and `https://d.example/schema#node` showed A's node, and Three's `item`
+  // showed One's item, with no problem: the by-name and by-text last resorts looked everywhere.
+  const schemas = {
+    A: { $id: 'https://a.example/schema', $defs: { N: { $anchor: 'node', type: 'string' } } },
+    D: { $id: 'https://d.example/schema', type: 'object', properties: { n: { $ref: '#node' }, byUri: { $ref: 'https://d.example/schema#node' } } },
+    One: { $id: 'https://one.example/root', $defs: { I: { $id: 'item', type: 'string' } } },
+    Three: { $id: 'https://three.example/root', type: 'object', properties: { item: { $ref: 'item' } } },
+    // In the root resource of a document without $self, the last resorts still help.
+    Root: { type: 'object', properties: { n: { $ref: '#node' }, item: { $ref: 'item' } } }
+  }
+  const a = analyze(spec31(schemas, '#/components/schemas/Root'))
+  const stop = (schema: string, prop: string) => {
+    const at = ['components', 'schemas', schema, 'properties', prop]
+    const followed = a.refs.follow(getAt(a.refs.root(), at), { doc: '', path: at })
+    return followed.stop ? followed.stop.kind : followed.loc.path.join('/')
+  }
+  assert.equal(stop('D', 'n'), 'missing')
+  assert.equal(stop('D', 'byUri'), 'missing')
+  assert.equal(stop('Three', 'item'), 'external')
+  assert.equal(stop('Root', 'n'), 'components/schemas/A/$defs/N')
+  assert.equal(stop('Root', 'item'), 'components/schemas/One/$defs/I')
+  const reported = a.problems.map((p) => `${p.rule} ${p.path.slice(2, 5).join('/')}`)
+  assert.ok(reported.includes('unresolved-ref D/properties/n'), reported.join('\n'))
+  assert.ok(reported.includes('unresolved-ref D/properties/byUri'), reported.join('\n'))
+  assert.ok(a.problems.some((p) => p.rule === 'external-ref' && p.params.file === 'https://three.example/item'), JSON.stringify(a.problems))
+  // With $self the document has a base of its own: no last resort there either.
+  const selfDoc = new Refs({ $self: 'https://api.example/openapi', components: { schemas: { A: schemas.A, R: { $ref: '#node' } } } })
+  assert.equal(selfDoc.resolve('#node', '', false, ['components', 'schemas', 'R']).kind, 'missing')
+})
+
 test('$dynamicRef takes the outermost resource of the dynamic scope', () => {
   // The generic array from the OpenAPI 3.1.1 and 3.2 Schema Object examples. Before: both arrays
   // had items of the "allow all" default, and the example was [].
@@ -213,4 +244,87 @@ components:
   assert.deepEqual(a.problems.map((p) => `${p.rule} ${p.path.join('/')}`), ['unused-component components/schemas/enum'])
   // A default value is data: a $id in it names nothing.
   assert.equal(a.refs.resolve('https://example.com/schemas/not-a-schema').kind, 'external')
+})
+
+test('a loaded file whose name has half of a UTF-16 pair still resolves', () => {
+  const refs = new Refs({ components: {} })
+  const key = refs.addDocument('pet' + String.fromCharCode(0xd83d) + '.yaml', { Pet: { type: 'object' } })
+  assert.equal(refs.resolve(key + '#/Pet').kind, 'local')
+})
+
+test('AsyncAPI: a message’s headers is a schema, so its $id, anchors and examples index as one', () => {
+  // Before: `headers` was read as a map of names: its $id and $anchor gave false external-ref
+  // notes, and a $id inside its examples data resolved to the example value.
+  const a = analyze(`asyncapi: 2.6.0
+info: { title: T, version: '1' }
+channels:
+  users:
+    subscribe:
+      message:
+        headers:
+          $id: https://example.com/headers
+          type: object
+          properties: { default: { $anchor: hdr-default, type: string } }
+          examples: [{ trace: { $id: https://example.com/fake } }]
+        payload:
+          type: object
+          properties:
+            all: { $ref: 'https://example.com/headers' }
+            one: { $ref: 'https://example.com/headers#hdr-default' }
+`)
+  assert.deepEqual(a.problems.map((p) => `${p.rule} ${p.path.join('/')}`), [])
+  assert.equal(a.refs.resolve('https://example.com/fake').kind, 'external')
+})
+
+test('draft-07 and older: a plain-name $id is an anchor of its resource', () => {
+  // Before: `$id: '#addr'` was taken as a new document URI, so `$ref: '#addr'` was unresolved.
+  const a = analyze(`asyncapi: 2.6.0
+info: { title: T, version: '1' }
+channels:
+  users:
+    subscribe:
+      message:
+        payload:
+          type: object
+          properties:
+            home: { $ref: '#addr' }
+            nick: { $ref: 'https://example.com/schemas/person#nick' }
+            person: { $ref: 'https://example.com/schemas/person' }
+components:
+  schemas:
+    Address: { $id: '#addr', type: object }
+    Person:
+      $id: https://example.com/schemas/person
+      type: object
+      properties: { nick: { $id: '#nick', type: string } }
+`)
+  assert.deepEqual(a.problems.map((p) => `${p.rule} ${p.path.join('/')}`), [])
+  const home = a.refs.resolve('#addr', '', false, ['channels', 'users', 'subscribe', 'message', 'payload', 'properties', 'home'])
+  assert.ok(home.kind === 'local' && home.loc.path.join('/') === 'components/schemas/Address')
+  const nick = a.refs.resolve('https://example.com/schemas/person#nick')
+  assert.ok(nick.kind === 'local' && nick.loc.path.join('/') === 'components/schemas/Person/properties/nick')
+})
+
+test('OpenAPI 3.1+: a $ref sibling enum or type narrows the target’s', () => {
+  // Before: `{ $ref: Status, enum: [available] }` showed both of Status's values as allowed.
+  const a = analyze(spec31({
+    Status: { type: ['string', 'null'], enum: ['available', 'sold', null] },
+    Count: { type: 'number' },
+    Pet: {
+      type: 'object',
+      properties: {
+        narrowed: { $ref: '#/components/schemas/Status', enum: ['available', 'gone'], type: 'string' },
+        disjoint: { $ref: '#/components/schemas/Status', enum: ['gone'] },
+        whole: { $ref: '#/components/schemas/Count', type: 'integer' }
+      }
+    }
+  }))
+  const pet = a.refs.follow({ $ref: '#/components/schemas/Pet' }, { doc: '', path: [] }).value as { properties: Record<string, unknown> }
+  const show = (name: string) => a.refs.follow(pet.properties[name], { doc: '', path: ['components', 'schemas', 'Pet', 'properties', name] }).value as Record<string, unknown>
+  assert.deepEqual(show('narrowed').enum, ['available'])
+  assert.equal(show('narrowed').type, 'string')
+  assert.deepEqual(show('disjoint').enum, ['available', 'sold', null])
+  assert.equal(show('whole').type, 'integer')
+  const example = exampleFromSchema(a.refs, pet.properties.narrowed, { doc: '', path: ['components', 'schemas', 'Pet', 'properties', 'narrowed'] }, { mode: 'response' })
+  assert.equal(example, 'available')
 })

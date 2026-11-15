@@ -2,7 +2,7 @@
 // viewer: each fixture is the smallest document that showed one.
 import { assert, test } from 'orca/testing'
 import { analyze } from '../analyze'
-import { asyncSecurityItems, replyOf, type AsyncApiModel } from '../spec/asyncapi'
+import { asyncSecurityItems, messagePayload, replyOf, schemaWithFormat, type AsyncApiModel } from '../spec/asyncapi'
 import { exampleFromSchema } from '../spec/example'
 import type { OpenApiModel } from '../spec/openapi'
 import { operationDetails } from '../spec/operation'
@@ -372,6 +372,78 @@ components:
   assert.deepEqual(v30.prop('nick'), { type: 'string', maxLength: 40 })
 })
 
+test('OpenAPI 3.1+: a callback reference’s summary and description add no callbacks', () => {
+  // Before (a regression of the sibling fix): the operation listed `onEvent description` and
+  // `onEvent summary` as callback expressions, since a Callback Object is a map of expressions.
+  const a = analyze(`openapi: 3.1.0
+info: { title: T, version: '1' }
+paths:
+  /subscribe:
+    post:
+      callbacks:
+        onEvent: { $ref: '#/components/callbacks/Event', description: Sent when something happens, summary: Event callback }
+      responses: { '200': { description: ok } }
+components:
+  callbacks:
+    Event:
+      '{$request.body#/url}':
+        post: { responses: { '200': { description: ok } } }
+`)
+  const model = (a.model as { model: OpenApiModel }).model
+  const details = operationDetails(model, a.refs, model.operations[0])
+  assert.deepEqual(details.callbacks.map((c) => `${c.name} ${c.expression}`), ['onEvent {$request.body#/url}'])
+  assert.deepEqual(a.problems.map((p) => p.rule), [])
+})
+
+test('security requirements count as uses of their schemes', () => {
+  // Before: every scheme page said "Nothing in this document refers to it", though servers and
+  // operations named it (by name in OpenAPI and AsyncAPI 2, by $ref in AsyncAPI 3).
+  const uses = (text: string) => {
+    const a = analyze(text)
+    return Object.fromEntries([...a.usages].filter(([k]) => k.includes('securitySchemes')).map(([k, v]) => [k.split('/').pop(), v.map((p) => p.join('/'))]))
+  }
+  assert.deepEqual(
+    uses(`openapi: 3.1.0
+info: { title: T, version: '1' }
+security: [{ bearer: [] }]
+paths:
+  /a: { get: { security: [{ key: [] }], responses: { '200': { description: ok } } } }
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer }
+    key: { type: apiKey, in: header, name: X-Key }
+`),
+    { bearer: ['security/0/bearer'], key: ['paths//a/get/security/0/key'] }
+  )
+  assert.deepEqual(
+    uses(`asyncapi: 2.6.0
+info: { title: T, version: '1' }
+servers: { prod: { url: example.com, protocol: mqtt, security: [{ apiKey: [] }] } }
+channels:
+  a: { publish: { operationId: pub, security: [{ oauth: [write] }], message: { payload: { type: string } } } }
+components:
+  securitySchemes:
+    apiKey: { type: apiKey, in: user }
+    oauth: { type: oauth2, flows: { clientCredentials: { tokenUrl: 'https://example.com/t', availableScopes: { write: w } } } }
+`),
+    { apiKey: ['servers/prod/security/0/apiKey'], oauth: ['channels/a/publish/security/0/oauth'] }
+  )
+  const v3 = `asyncapi: 3.0.0
+info: { title: T, version: '1' }
+servers: { prod: { host: example.com, protocol: mqtt, security: [{ $ref: '#/components/securitySchemes/apiKey' }] } }
+channels: { a: { address: a, messages: { m: { payload: { type: string } } } } }
+operations:
+  send: { action: send, channel: { $ref: '#/channels/a' }, security: [{ $ref: '#/components/securitySchemes/oidc' }, { $ref: '#/components/securitySchemes/gone' }] }
+components:
+  securitySchemes:
+    apiKey: { type: apiKey, in: user }
+    oidc: { type: openIdConnect, openIdConnectUrl: 'https://example.com/.well-known' }
+`
+  assert.deepEqual(uses(v3), { apiKey: ['servers/prod/security/0/$ref'], oidc: ['operations/send/security/0/$ref'] })
+  // And a reference to a scheme that is not there is now reported.
+  assert.deepEqual(found(v3), ['unresolved-ref operations/send/security/1/$ref'])
+})
+
 test('AsyncAPI traits are merged into messages and operations', () => {
   // Before: every streetlights message lacked the commonHeaders trait's headers, and operation
   // trait bindings were not shown.
@@ -492,4 +564,162 @@ components:
   assert.equal(reply('ping').channel?.id, 'pong')
   assert.deepEqual(reply('ping').messages.map((m) => m.name), ['pong', 'error'])
   assert.deepEqual(reply('pingOne').messages.map((m) => m.name), ['pong'])
+})
+
+test('a component Link with a bad operationId is reported once, not once per use', () => {
+  // Before: the same problem at the same path, once for the definition and once per response.
+  const problems = found(`openapi: 3.1.0
+info: { title: T, version: '1' }
+paths:
+  /a:
+    get:
+      operationId: getA
+      responses:
+        '200': { description: ok, links: { next: { $ref: '#/components/links/Next' } } }
+        '201': { description: ok, links: { next: { $ref: '#/components/links/Next' } } }
+components:
+  links:
+    Next: { operationId: missingOp }
+`)
+  assert.deepEqual(problems.filter((p) => p.startsWith('link-operation')), ['link-operation components/links/Next/operationId'])
+})
+
+test('a $ref that is not a string is reported, with the YAML quoting hint', () => {
+  // Before: `$ref: #/components/schemas/Pet` unquoted is `$ref: null` in YAML, and nothing was said.
+  for (const version of ['3.0.3', '3.1.0']) {
+    const result = analyze(`openapi: ${version}
+info: { title: T, version: '1' }
+paths:
+  /a:
+    get:
+      parameters:
+        - $ref: 42
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  details:
+                    $ref: #/components/schemas/Pet
+components:
+  schemas:
+    Pet: { type: object }
+`)
+    const wrong = result.problems.filter((p) => p.rule === 'wrong-type' && p.path.at(-1) === '$ref')
+    assert.deepEqual(wrong.map((p) => [p.path.join('/'), p.params.actual]), [
+      ['paths//a/get/parameters/0/$ref', 'integer'],
+      ['paths//a/get/responses/200/content/application/json/schema/properties/details/$ref', 'null']
+    ], version)
+    assert.equal(wrong[0].params.expected, 'reference string')
+    // No knock-on noise from the parameter's missing fields.
+    assert.ok(!result.problems.some((p) => p.rule === 'required-field' && p.path.join('/') === 'paths//a/get/parameters/0'), version)
+  }
+})
+
+test('AsyncAPI 2.x: a schemaFormat from a message trait picks the payload rules', () => {
+  // Before: an Avro payload whose schemaFormat came from a trait was checked as a JSON Schema.
+  const problems = found(`asyncapi: 2.6.0
+info: { title: T, version: '1' }
+channels:
+  users:
+    subscribe:
+      message:
+        traits: [{ $ref: '#/components/messageTraits/Avro' }]
+        payload: { type: record, name: User, fields: [{ name: id, type: long }] }
+components:
+  messageTraits:
+    Avro: { schemaFormat: 'application/vnd.apache.avro;version=1.9.0' }
+`)
+  assert.deepEqual(problems, [])
+})
+
+test('AsyncAPI: references inside bindings are checked, not only counted', () => {
+  // Before: a binding $ref to a missing schema gave no error, and an external one no note.
+  const result = analyze(`asyncapi: 2.6.0
+info: { title: T, version: '1' }
+channels:
+  users:
+    subscribe:
+      message:
+        payload: { type: string }
+        bindings:
+          kafka:
+            key: { $ref: '#/components/schemas/Missing' }
+  costs:
+    subscribe:
+      message:
+        payload: { type: string }
+        bindings:
+          kafka:
+            key: { $ref: 'https://example.com/key.avsc' }
+  ok:
+    subscribe:
+      message:
+        payload: { type: string }
+        bindings:
+          kafka:
+            key: { $ref: '#/components/schemas/Key' }
+components:
+  schemas:
+    Key: { type: string }
+`)
+  assert.deepEqual(result.problems.map((p) => `${p.rule} ${p.path.join('/')}`), [
+    'unresolved-ref channels/users/subscribe/message/bindings/kafka/key/$ref',
+    'external-ref channels/costs/subscribe/message/bindings/kafka/key/$ref'
+  ])
+  // An extension's references still only count as uses.
+  assert.deepEqual(found(`asyncapi: 2.6.0
+info: { title: T, version: '1' }
+channels:
+  a: { subscribe: { message: { payload: { type: string } } } }
+x-tooling: { schema: { $ref: '#/components/schemas/Missing' } }
+`), [])
+})
+
+test('AsyncAPI: a payload that is not a JSON Schema is shown as its source, with its format', () => {
+  // Before: an Avro record was drawn as a schema tree (just `record`, no fields), and a 2.x
+  // message's schemaFormat was never shown.
+  const v2 = analyze(`asyncapi: 2.6.0
+info: { title: T, version: '1' }
+channels:
+  users:
+    subscribe:
+      message:
+        traits: [{ $ref: '#/components/messageTraits/Avro' }]
+        payload: { type: record, name: User, fields: [{ name: id, type: long }] }
+  plain:
+    subscribe:
+      message:
+        schemaFormat: 'application/schema+json;version=draft-07'
+        payload: { type: string }
+components:
+  messageTraits:
+    Avro: { schemaFormat: 'application/vnd.apache.avro;version=1.9.0' }
+`)
+  const m2 = (v2.model as { model: AsyncApiModel }).model
+  const shown2 = m2.operations.map((op) => op.messages.map((msg) => messagePayload(msg.value, msg.loc, m2.family)))
+  assert.deepEqual(shown2.map(([p]) => [p?.format, p?.source]), [['application/vnd.apache.avro;version=1.9.0', true], ['application/schema+json;version=draft-07', false]])
+  const v3 = analyze(`asyncapi: 3.0.0
+info: { title: T, version: '1' }
+channels:
+  users: { address: users, messages: { User: { payload: { schemaFormat: 'application/vnd.apache.avro+json;version=1.9.0', schema: { type: record, name: User, fields: [] } } } } }
+operations:
+  get: { action: receive, channel: { $ref: '#/channels/users' } }
+components:
+  schemas:
+    Json: { schemaFormat: 'application/schema+yaml;version=draft-07', schema: { type: string } }
+    Plain: { type: string }
+`)
+  const m3 = (v3.model as { model: AsyncApiModel }).model
+  const user = m3.operations[0].messages[0]
+  const p3 = messagePayload(user.value, user.loc, m3.family)!
+  assert.equal(p3.source, true)
+  assert.deepEqual(p3.loc.path, ['channels', 'users', 'messages', 'User', 'payload', 'schema'])
+  const at = (name: string) => ({ doc: '', path: ['components', 'schemas', name] })
+  const json = schemaWithFormat((v3.parsed.value as any).components.schemas.Json, at('Json'))!
+  assert.deepEqual([json.source, json.loc.path.at(-1)], [false, 'schema'])
+  assert.equal(schemaWithFormat((v3.parsed.value as any).components.schemas.Plain, at('Plain')), undefined)
 })

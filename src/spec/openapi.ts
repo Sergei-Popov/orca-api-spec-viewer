@@ -455,6 +455,19 @@ export function pathTemplateNames(route: string): string[] {
   return names
 }
 
+/**
+ * A summary short enough for a row or a title: its first line, Markdown links as their text, and
+ * if that is still long, its first sentence or the first 120 characters. Summaries should be
+ * short, but some documents (GitHub's webhooks) put paragraphs with links there.
+ */
+export function shortSummary(text: string | undefined): string {
+  if (!text) return ''
+  const line = text.trim().split(/\r?\n/)[0].trim().replace(/!?\[([^\]\n]*)\]\([^()\s]*\)/g, '$1')
+  if (line.length <= 120) return line
+  const sentence = /^(.{20,119}?[.!?])\s/.exec(line)
+  return sentence ? sentence[1] : line.slice(0, 119).trimEnd() + '…'
+}
+
 export function operationTitle(op: Operation): string {
-  return op.summary || op.operationId || `${op.method.toUpperCase()} ${op.route}`
+  return shortSummary(op.summary) || op.operationId || `${op.method.toUpperCase()} ${op.route}`
 }

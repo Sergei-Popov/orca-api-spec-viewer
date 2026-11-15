@@ -10,6 +10,7 @@
 // the same way elsewhere is the last resort. A `$dynamicRef` takes the outermost resource of its
 // dynamic scope (carried in `Loc.scope`) that has the anchor.
 
+import { sameJson } from './json-text'
 import { fragmentToPath, getAt, isObject, toPointer } from './pointer'
 
 /** A place in one of the documents: '' is the open file, others are files loaded by hand. */
@@ -72,6 +73,8 @@ export function fileBaseName(file: string): string {
 interface DocIndex {
   /** The document's URI: OpenAPI 3.2's `$self`, or PLACEHOLDER_BASE. */
   base: string
+  /** The document sets its URI with `$self`. */
+  self: boolean
   /** Schema resources by absolute URI. */
   ids: Map<string, string[]>
   /** `$id`s as written, for a reference that matches one only by its text. */
@@ -162,9 +165,16 @@ export class Refs {
     let uri = resource.base
     // A pointer inside a resource is tried there first, then from the root.
     let fallback = resource.path.length > 0
+    // Matching an `$id` by its text, or an anchor by its name alone, is a last resort for a
+    // reference in the document's own resource when no `$id` or `$self` gives it a base: inside a
+    // resource it would pick another resource's schema.
+    const loose = resource.path.length === 0 && !index.self
+    let external = file
     if (file !== '') {
       fallback = false
       const absolute = resolveUri(file, resource.base)
+      // Named by the URI it resolves to where a real base makes that the clearer name.
+      if (absolute !== null && !loose && !absolute.startsWith(PLACEHOLDER_BASE)) external = absolute
       const byId = absolute !== null ? index.ids.get(absolute) : undefined
       if (byId) {
         base = byId
@@ -172,7 +182,7 @@ export class Refs {
       } else if (absolute !== null && sameDocument(absolute, index.base)) {
         base = []
         uri = index.base
-      } else if (index.rawIds.has(file.replace(/#$/, ''))) {
+      } else if (loose && index.rawIds.has(file.replace(/#$/, ''))) {
         base = index.rawIds.get(file.replace(/#$/, ''))!
         uri = this.resourceOf(from, base).base
       } else {
@@ -182,7 +192,7 @@ export class Refs {
         if (doc !== null) uri = this.index(doc).base
       }
     }
-    if (doc === null) return { kind: 'external', ref, file, fragment }
+    if (doc === null) return { kind: 'external', ref, file: external, fragment }
     if (fragment === '' || fragment === '#') {
       return { kind: 'local', loc: { doc, path: base }, value: getAt(this.docs.get(doc), base) }
     }
@@ -198,14 +208,14 @@ export class Refs {
       return { kind: 'missing', ref, reason: 'not-found' }
     }
     // A plain name: an anchor of the target resource (a $dynamicAnchor is one too), or, as a last
-    // resort, the first anchor of that name anywhere.
+    // resort for the root resource of a document without `$self`, the first anchor of that name.
     const name = decodeFragment(fragment.slice(1))
     const target = this.index(doc)
+    const byName = uri === target.base && !target.self && (file !== '' || loose)
     const found =
       target.anchors.get(`${uri}#${name}`) ??
       target.dynamicAnchors.get(`${uri}#${name}`) ??
-      target.anchorNames.get(name) ??
-      target.dynamicAnchorNames.get(name)
+      (byName ? (target.anchorNames.get(name) ?? target.dynamicAnchorNames.get(name)) : undefined)
     if (!found) return { kind: 'missing', ref, reason: 'anchor-not-found' }
     const loc = { doc, path: found }
     return { kind: 'local', loc, value: this.get(loc) }
@@ -242,7 +252,7 @@ export class Refs {
     const done = (extra: Omit<Followed, 'loc' | 'via'>): Followed => ({ ...extra, loc: scope && scope !== at.scope ? { ...at, scope } : at, via })
     for (let hop = 0; ; hop++) {
       const ref = refOf(current)
-      if (!ref) return done({ value: this.options.siblings ? this.withSiblings(current, referring, isSchemaPlace(at.path)) : current })
+      if (!ref) return done({ value: this.options.siblings && !isCallbackPlace(at.path) && !isCallbackPlace(loc.path) ? this.withSiblings(current, referring, isSchemaPlace(at.path)) : current })
       referring.push(current as Record<string, unknown>)
       // A long chain is not a cycle: it stops with its own reason.
       if (hop >= MAX_HOPS) return done({ value: current, stop: { kind: 'missing', ref: ref.ref, reason: 'too-long' } })
@@ -286,12 +296,15 @@ export class Refs {
     const root = this.docs.get(doc)
     // OpenAPI 3.2: `$self` is the document's URI. Other files get one under the placeholder.
     const self = isObject(root) && typeof root.$self === 'string' ? root.$self : undefined
-    const fallback = doc === '' ? PLACEHOLDER_BASE : new URL(encodeURIComponent(doc), PLACEHOLDER_BASE).href
+    const fallback = doc === '' ? PLACEHOLDER_BASE : new URL(encodeName(doc), PLACEHOLDER_BASE).href
     const base = (self !== undefined ? resolveUri(self, fallback) : null) ?? fallback
-    index = { base, ids: new Map(), rawIds: new Map(), anchors: new Map(), anchorNames: new Map(), dynamicAnchors: new Map(), dynamicAnchorNames: new Map(), resources: new Map() }
+    index = { base, self: base !== fallback, ids: new Map(), rawIds: new Map(), anchors: new Map(), anchorNames: new Map(), dynamicAnchors: new Map(), dynamicAnchorNames: new Map(), resources: new Map() }
     index.resources.set('', { path: [], base })
     this.indexes.set(doc, index)
-    buildIndex(root, index)
+    // AsyncAPI's `headers` is a schema; draft-07 and older name anchors with `$id: '#name'`.
+    const main = this.docs.get('')
+    const asyncapi = isObject(main) && typeof own(main, 'asyncapi') === 'string'
+    buildIndex(root, index, { names: asyncapi ? ASYNC_NAME_MAPS : NAME_MAPS, plainIdAnchors: !this.options.siblings })
     return index
   }
 }
@@ -313,6 +326,14 @@ function isSchemaPlace(path: readonly string[]): boolean {
   return true
 }
 
+/**
+ * A Callback Object, which is a map of expressions with no summary or description of its own: a
+ * Reference Object's summary and description have no effect there (OpenAPI 3.1 §4.8.23).
+ */
+function isCallbackPlace(path: readonly string[]): boolean {
+  return path.length >= 2 && path[path.length - 2] === 'callbacks' && !isSchemaPlace(path)
+}
+
 /** A field beside `$ref` that says something about the target (not `$id`, `$defs`, …). */
 function isSibling(key: string): boolean {
   return !key.startsWith('$') || key === '$comment'
@@ -320,9 +341,9 @@ function isSibling(key: string): boolean {
 
 /**
  * A reference's target with the reference's siblings applied: annotations replace the target's,
- * bounds take the stricter value, `required` lists are joined and `properties` added to; any
- * other keyword the target lacks is added (where both have one, both apply, and the target's is
- * shown).
+ * bounds take the stricter value, `enum` and `type` keep what both allow, `required` lists are
+ * joined and `properties` added to; any other keyword the target lacks is added (where both have
+ * one, such as `pattern`, both apply, and the target's is shown).
  */
 function mergeSiblings(target: unknown, referring: Record<string, unknown>, schema: boolean): unknown {
   if (!isObject(target)) return target
@@ -336,10 +357,32 @@ function mergeSiblings(target: unknown, referring: Record<string, unknown>, sche
     if (ANNOTATIONS.has(key) || !Object.prototype.hasOwnProperty.call(target, key)) out[key] = mine
     else if (typeof mine === 'number' && typeof theirs === 'number' && LOWER_BOUNDS.has(key)) out[key] = Math.max(mine, theirs)
     else if (typeof mine === 'number' && typeof theirs === 'number' && UPPER_BOUNDS.has(key)) out[key] = Math.min(mine, theirs)
+    else if (key === 'enum' && Array.isArray(mine) && Array.isArray(theirs)) out[key] = narrowEnum(theirs, mine)
+    else if (key === 'type' && typeList(mine) && typeList(theirs)) out[key] = narrowTypes(typeList(theirs)!, typeList(mine)!) ?? theirs
     else if (key === 'required' && Array.isArray(mine) && Array.isArray(theirs)) out[key] = [...new Set([...theirs, ...mine])]
     else if (key === 'properties' && isObject(mine) && isObject(theirs)) out[key] = { ...theirs, ...mine }
   }
   return out
+}
+
+/** The values both allow; when none is, the target's stay (nothing is valid, which is the document's to fix). */
+function narrowEnum(theirs: unknown[], mine: unknown[]): unknown[] {
+  const both = theirs.filter((value) => mine.some((other) => sameJson(value, other)))
+  return both.length > 0 ? both : theirs
+}
+
+function typeList(value: unknown): string[] | null {
+  if (typeof value === 'string') return [value]
+  return Array.isArray(value) && value.every((item) => typeof item === 'string') ? value : null
+}
+
+/** The types both allow (`integer` is a `number`); null when none is, so the target's stays. */
+function narrowTypes(theirs: string[], mine: string[]): string | string[] | null {
+  const allows = (list: string[], type: string) => list.includes(type) || (type === 'integer' && list.includes('number'))
+  const both = [...new Set([...theirs.filter((type) => allows(mine, type)), ...mine.filter((type) => allows(theirs, type))])]
+  if (both.length === 0) return null
+  const kept = both.includes('integer') ? both.filter((type) => type !== 'number' || (theirs.includes('number') && mine.includes('number'))) : both
+  return kept.length === 1 ? kept[0] : kept
 }
 
 /** The reference an object carries: `$ref`, or a schema's `$dynamicRef`. */
@@ -397,12 +440,16 @@ const NAME_MAPS = new Set([
   'messages',
   'operations'
 ])
+/** In AsyncAPI a message's `headers` is a schema, not a map of names. */
+const ASYNC_NAME_MAPS = new Set([...NAME_MAPS].filter((key) => key !== 'headers'))
+/** A draft-07 plain-name `$id`, which is an anchor of its resource. */
+const PLAIN_NAME_ID = /^#[A-Za-z][-A-Za-z0-9.:_]*$/
 
 /**
  * Walks a document once for `$id`, `$anchor` and `$dynamicAnchor`, skipping example data. Entries
  * link to their parent instead of carrying a path, so deep documents stay linear.
  */
-function buildIndex(root: unknown, index: DocIndex): void {
+function buildIndex(root: unknown, index: DocIndex, options: { names: ReadonlySet<string>; plainIdAnchors: boolean }): void {
   const seen = new WeakSet<object>()
   const stack: IndexEntry[] = [{ node: root, parent: null, key: '', depth: 0, base: index.base, names: false }]
   let steps = 0
@@ -421,7 +468,11 @@ function buildIndex(root: unknown, index: DocIndex): void {
     const pathHere = () => (path ??= entryPath(entry))
     if (!entry.names) {
       const id = own(obj, '$id')
-      if (typeof id === 'string' && id !== '') {
+      if (typeof id === 'string' && options.plainIdAnchors && PLAIN_NAME_ID.test(id)) {
+        const name = id.slice(1)
+        if (!index.anchors.has(`${base}#${name}`)) index.anchors.set(`${base}#${name}`, pathHere())
+        if (!index.anchorNames.has(name)) index.anchorNames.set(name, pathHere())
+      } else if (typeof id === 'string' && id !== '') {
         const clean = id.replace(/#$/, '')
         if (!index.rawIds.has(clean)) index.rawIds.set(clean, pathHere())
         const absolute = resolveUri(clean, base)
@@ -446,7 +497,7 @@ function buildIndex(root: unknown, index: DocIndex): void {
     for (let i = keys.length - 1; i >= 0; i--) {
       const key = keys[i]
       if (!entry.names && DATA_KEYWORDS.has(key)) continue
-      stack.push({ node: obj[key], parent: entry, key, depth: depth + 1, base: nextBase, names: !entry.names && NAME_MAPS.has(key) })
+      stack.push({ node: obj[key], parent: entry, key, depth: depth + 1, base: nextBase, names: !entry.names && options.names.has(key) })
     }
   }
 }
@@ -469,6 +520,15 @@ function resolveUri(uri: string, base: string): string | null {
 /** Whether a URI names the document itself (its query aside). */
 function sameDocument(uri: string, base: string): boolean {
   return uri === base || uri.split('?')[0] === base.split('?')[0]
+}
+
+/** A file name as one URI segment; half of a UTF-16 pair, which cannot be encoded, becomes U+FFFD. */
+function encodeName(name: string): string {
+  try {
+    return encodeURIComponent(name)
+  } catch {
+    return encodeURIComponent(name.replace(/[\ud800-\udfff]/g, '\ufffd'))
+  }
 }
 
 function decodeFragment(text: string): string {

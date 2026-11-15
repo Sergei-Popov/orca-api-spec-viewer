@@ -4,7 +4,8 @@
 
 import { isObject, own } from '../spec/pointer'
 import { schemaTypes } from '../spec/schema'
-import type { WalkContext } from './walker'
+import { formatLevel } from '../spec/schema-format'
+import { actualType, type WalkContext } from './walker'
 import { duplicateIndexes, jsonText, sameJson } from '../spec/json-text'
 
 const TYPES_OLD = ['string', 'number', 'integer', 'boolean', 'array', 'object']
@@ -48,18 +49,7 @@ function schemaLevel(ctx: WalkContext): number {
   return ctx.schemaLevel ?? (ctx.family === 'arazzo1' || ctx.family === 'overlay1' ? 31 : ctx.level)
 }
 
-/**
- * The rules for an AsyncAPI schema in the given `schemaFormat`: the document's for AsyncAPI and
- * JSON Schema, OpenAPI 3.0's for OpenAPI schemas, and none (null) for Avro, RAML, Protobuf and
- * anything else, which are not JSON Schema at all.
- */
-export function formatLevel(format: string, documentLevel: number): number | null {
-  const type = format.trim().toLowerCase()
-  if (/^application\/vnd\.aai\.asyncapi(?:\+json|\+yaml)?(?:;|$)/.test(type)) return documentLevel
-  if (/^application\/schema\+(?:json|yaml)(?:;|$)/.test(type)) return documentLevel
-  if (/^application\/vnd\.oai\.openapi(?:\+json|\+yaml)?(?:;|$)/.test(type)) return 30
-  return null
-}
+export { formatLevel } from '../spec/schema-format'
 
 /** AsyncAPI 3's Multi Format Schema Object: `{ schemaFormat, schema }`. */
 function multiFormat(value: Record<string, unknown>, ctx: WalkContext): boolean {
@@ -107,6 +97,7 @@ function checkOne(schema: Record<string, unknown>, path: string[], ctx: WalkCont
   const modern = schemaLevel(ctx) >= 31
   const old = schemaLevel(ctx) < 31
   const ref = own(schema, '$ref')
+  if (ref !== undefined && typeof ref !== 'string') ctx.problems.error('wrong-type', [...path, '$ref'], { expected: 'reference string', actual: actualType(ref) })
   if (typeof ref === 'string') {
     ctx.refs.push({ ref, path: [...path, '$ref'] })
     // In Swagger 2.0 and OpenAPI 3.0, a $ref replaces its object: siblings are ignored.

@@ -23,10 +23,12 @@ All notable changes to this plugin are documented here. The format follows
   mapping, and recursion shown as links.
 - Given and generated examples, and offline code samples for curl, `fetch`, Python `requests`
   and HTTPie with copy buttons. Parameters are written as their `style`, `explode` or
-  `collectionFormat` says, OpenAPI 3.2 `querystring` parameters as their media type says. Values
-  are quoted for the shell and never read local files; a method that is not a valid HTTP method
-  name gets no samples, and values a shell command cannot carry safely (NUL, carriage return,
-  a line break in a header) leave out the curl and HTTPie samples.
+  `collectionFormat` says, OpenAPI 3.2 `querystring` parameters as their media type says, and
+  urlencoded and multipart bodies as their Encoding Object says. Values are quoted for the shell
+  and never read local files; a method that is not a valid HTTP method name gets no samples, and
+  values a shell command cannot carry safely (NUL, carriage return) leave out the curl and HTTPie
+  samples. GET and HEAD keep their method with a body. Whatever a client cannot send as written
+  is left out of that sample with a note saying so.
 - Component pages list where each component is used.
 - Lazy `$ref` and `$dynamicRef` resolution as JSON Schema 2020-12 says (`$id` and `$anchor` by
   URI against OpenAPI 3.2's `$self`, `$dynamicRef` in its dynamic scope, and from OpenAPI 3.1 on
@@ -34,8 +36,10 @@ All notable changes to this plugin are documented here. The format follows
   references; external references shown as such, and other files can be added by hand for the
   session. References inside `x-` extensions and AsyncAPI bindings count as uses.
 - AsyncAPI traits merged into messages and operations, security schemes written inline shown as
-  cards, and replies without messages showing their channel's; OpenAPI 3.0 `x-webhooks` shown as
-  webhooks; OpenAPI 3.2 `itemSchema` labelled per item.
+  cards, and replies without messages showing their channel's; payloads in a `schemaFormat` that
+  is not JSON Schema (Avro, Protobuf, RAML…) shown as source; webhooks listed by name with their
+  summary beside it, and OpenAPI 3.0 `x-webhooks` shown as webhooks; OpenAPI 3.2 `itemSchema`
+  labelled per item.
 - A problems panel with structural checks per version and lint rules, each with its line,
   column and JSON pointer, and a source view that marks them, scrolls sideways and says how much
   of a long line it leaves out.

@@ -4,11 +4,11 @@
 import { format } from '../i18n'
 import { familyLabel } from '../spec/detect'
 import { exampleFromSchema } from '../spec/example'
-import { operationServers, operationSecurity, requirementScheme, securitySchemes, type OpenApiModel, type Operation, type ServerInfo, type TagNode } from '../spec/openapi'
+import { operationServers, operationSecurity, requirementScheme, securitySchemes, shortSummary, type OpenApiModel, type Operation, type ServerInfo, type TagNode } from '../spec/openapi'
 import { compareStatus, examplesOf, mediaList, operationDetails, paramView, type BodyView, type ExampleView, type HeaderView, type LinkView, type Located, type MediaView, type OperationDetails, type ParamView, type ResponseView } from '../spec/operation'
 import { getAt, isObject, own, str, toPointer } from '../spec/pointer'
 import type { Loc } from '../spec/refs'
-import { buildRequest, renderSample, sampleLanguages, shellSafe, type SampleLanguage } from '../spec/samples'
+import { buildRequest, commonNotes, renderSample, sampleLanguages, sampleNotes, shellSafe, type SampleLanguage, type SampleNote } from '../spec/samples'
 import {
   banner,
   chip,
@@ -266,7 +266,7 @@ export function operationList(ctx: PageCtx, ops: Operation[]): HTMLElement {
           { className: 'lrow' },
           methodBadge(op.method),
           routeEl(op.route, 'route'),
-          h('span', { className: 'grow sub', style: op.deprecated ? 'text-decoration:line-through' : null }, op.summary),
+          h('span', { className: 'grow sub', style: op.deprecated ? 'text-decoration:line-through' : null }, shortSummary(op.summary)),
           op.deprecated ? h('span', { className: 'flag dep-chip' }, ctx.t.deprecated) : null
         ),
         () => ctx.go(op.key)
@@ -344,9 +344,9 @@ function paramTable(ctx: PageCtx, params: ParamView[], idBase: string): HTMLElem
       const desc = markdown(ctx, p.description)
       if (desc) cell.append(desc)
     }
-    for (const media of p.content) {
-      append(cell, h('div', { className: 'sub mono' }, media.type), media.schema ? schemaTree(ctx, media.schema.value, media.schema.loc, `${idBase}/${p.name}/${media.type}`) : null)
-      if (!p.hasExample && p.examples.length === 0) append(cell, exampleLine(ctx, media.examples))
+    for (const row of contentRows(p)) {
+      append(cell, h('div', { className: 'sub mono' }, row.type), row.schema ? schemaTree(ctx, row.schema.value, row.schema.loc, `${idBase}/${p.name}/${row.type}`) : null)
+      append(cell, exampleLine(ctx, row.example ? [row.example] : []))
     }
     if (p.hasExample) cell.append(h('div', { className: 'tvals' }, ctx.t.example + ':', h('code', null, valueToText(p.example).slice(0, 300))))
     else append(cell, exampleLine(ctx, p.examples))
@@ -355,9 +355,22 @@ function paramTable(ctx: PageCtx, params: ParamView[], idBase: string): HTMLElem
   return table
 }
 
+/**
+ * What a parameter's or header's `content` adds to its row: each media type, its schema, and the
+ * example to show when the row has none of its own.
+ */
+export function contentRows(row: { content: MediaView[]; hasExample: boolean; examples?: ExampleView[] }): { type: string; schema?: Located; example?: ExampleView }[] {
+  const given = row.hasExample || (row.examples?.length ?? 0) > 0
+  return row.content.map((media) => ({ type: media.type, schema: media.schema, example: given ? undefined : shownExample(media.examples) }))
+}
+
 /** The first example with something to show: 3.2's serialized form as written, or the value. */
+function shownExample(examples: ExampleView[]): ExampleView | undefined {
+  return examples.find((e) => e.serializedValue !== undefined || e.hasValue)
+}
+
 function exampleLine(ctx: PageCtx, examples: ExampleView[]): HTMLElement | null {
-  const ex = examples.find((e) => e.serializedValue !== undefined || e.hasValue)
+  const ex = shownExample(examples)
   if (!ex) return null
   const text = ex.serializedValue ?? valueToText(ex.value)
   return h('div', { className: 'tvals' }, ctx.t.example + ':', h('code', null, text.slice(0, 300)))
@@ -382,6 +395,11 @@ function headerTable(ctx: PageCtx, headers: HeaderView[], idBase: string): HTMLE
     } else {
       const desc = markdown(ctx, header.description)
       if (desc) cell.append(desc)
+    }
+    // A header defined with `content` (one media type) instead of a schema.
+    for (const row of contentRows(header)) {
+      append(cell, h('div', { className: 'sub mono' }, row.type), row.schema ? schemaTree(ctx, row.schema.value, row.schema.loc, `${idBase}/h:${header.name}/${row.type}`) : null)
+      append(cell, exampleLine(ctx, row.example ? [row.example] : []))
     }
     if (header.hasExample) cell.append(h('div', { className: 'tvals' }, ctx.t.example + ':', h('code', null, valueToText(header.example).slice(0, 300))))
     table.append(h('tr', null, nameCell, cell))
@@ -587,11 +605,14 @@ function samplesBox(ctx: PageCtx, model: OpenApiModel, op: Operation, details: O
     return box
   }
   const code = h('div')
+  const languageNotes = h('div')
+  const note = (n: SampleNote) => h('div', { className: 'note' }, svg(icons.info), h('span', null, format(ctx.t.sampleNotes[n.key], { method: request.method, ...n.values })))
   let text = ''
   const draw = (lang: string) => {
     const language = (available.includes(lang as SampleLanguage) ? lang : available[0]) as SampleLanguage
     text = renderSample(language, request)
     code.replaceChildren(codeBlock(text, language === 'curl' || language === 'httpie' ? 'shell' : 'js'))
+    languageNotes.replaceChildren(...sampleNotes(language, request).map(note))
   }
   const langs = available.map((l) => ({ value: l, label: ctx.t.samples[l] ?? l }))
   const saved = ctx.tab('samples#lang', 'curl')
@@ -599,11 +620,13 @@ function samplesBox(ctx: PageCtx, model: OpenApiModel, op: Operation, details: O
   box.append(
     h('div', { className: 'boxhead' }, h('b', null, ctx.t.codeSamples), h('span', { className: 'grow' }), tabs(ctx, 'samples#lang', langs, initial, draw), copyButton(ctx, () => text, ctx.t.copyCode)),
     code,
+    languageNotes,
     h('div', { className: 'note' }, svg(icons.info), h('span', null, ctx.t.noNetwork, request.placeholderHost ? ' ' + ctx.t.placeholderHost : ''))
   )
   if (request.placeholders) box.append(h('div', { className: 'note' }, svg(icons.info), h('span', null, format(ctx.t.samplesFillIn, { names: request.placeholders.join(', ') }))))
   if (request.replaced) box.append(h('div', { className: 'note' }, svg(icons.info), h('span', null, ctx.t.samplesReplaced)))
   if (!shellSafe(request)) box.append(h('div', { className: 'note' }, svg(icons.info), h('span', null, ctx.t.samplesNoShell)))
+  for (const n of commonNotes(request)) box.append(note(n))
   draw(initial)
   return box
 }
@@ -621,7 +644,8 @@ export function operationPage(ctx: PageCtx, model: OpenApiModel, op: Operation):
   else if (op.scope === 'callback') crumbs.append(chip(ctx.t.callbacks))
   for (const tag of op.tags) crumbs.append(clickable(chip(tag, model.badgeTags.has(tag) ? '' : 'tagchip'), () => ctx.go('tag:' + tag)))
   main.append(crumbs)
-  main.append(h('h1', { className: 'h' }, op.summary || op.operationId || op.route))
+  const title = shortSummary(op.summary)
+  main.append(h('h1', { className: 'h' }, title || op.operationId || op.route))
   main.append(h('div', { className: 'oprow' }, methodBadgeFull(op.method.toUpperCase()), routeEl(op.route), copyButton(ctx, op.route, ctx.t.copyPath)))
   const meta: Child[] = []
   if (op.operationId) meta.push(h('span', null, ctx.t.operationId + ' ', h('span', { className: 'mono' }, op.operationId)))
@@ -630,6 +654,8 @@ export function operationPage(ctx: PageCtx, model: OpenApiModel, op: Operation):
   if (line) meta.push(clickable(h('a', { className: 'link' }, format(ctx.t.line, { n: line })), () => ctx.showLine(line)))
   if (meta.length) main.append(h('div', { className: 'meta' }, ...meta))
   if (op.deprecated) main.append(banner('warning', ctx.t.deprecated))
+  // A summary too long for the title is shown whole, as text.
+  if (title && title !== op.summary.trim()) append(main, markdown(ctx, op.summary))
   append(main, ...describe(ctx, op.op))
 
   const servers = operationServers(model, op)

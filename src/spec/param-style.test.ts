@@ -36,7 +36,8 @@ test('query parameters: form, spaceDelimited, pipeDelimited and deepObject', () 
     [p('form', false), 'color=blue,black,brown', 'color=R,100,G,200,B,150'],
     [p('spaceDelimited', false), 'color=blue black brown', 'color=R 100 G 200 B 150'],
     [p('pipeDelimited', false), 'color=blue|black|brown', 'color=R|100|G|200|B|150'],
-    [p('deepObject', true), 'color=blue&color=black&color=brown', 'color[R]=100&color[G]=200&color[B]=150']
+    // OpenAPI leaves deepObject arrays undefined: the common `name[]` form, reported as deep.
+    [p('deepObject', true), 'color[]=blue&color[]=black&color[]=brown', 'color[R]=100&color[G]=200&color[B]=150']
   ]
   for (const [style, array, object] of table) {
     const label = `${style.style} explode=${style.explode}`
@@ -51,6 +52,32 @@ test('query parameters: form, spaceDelimited, pipeDelimited and deepObject', () 
   // Nested values stay compact JSON; a parameter with `content` is one JSON value.
   assert.equal(query(p('form', true), [{ a: 1 }, 2]), 'color={"a":1}&color=2')
   assert.equal(query({ ...p('form', true), json: true }, OBJECT), 'color={"R":100,"G":200,"B":150}')
+})
+
+test('items are encoded before they are joined, so only the separators stay literal', () => {
+  // Before: ['a', 'b,c'] went out as a,b,c from curl and fetch, the same as three items.
+  const enc = (style: ParamStyle, value: unknown) => {
+    const report = {}
+    const pairs = styledPairs(style, value, encodeURIComponent, report)
+    return [pairs.map(([k, v]) => `${k}=${v}`).join('&'), report]
+  }
+  assert.deepEqual(enc(p('form', false), ['a', 'b,c']), ['color=a,b%2Cc', { joined: true }])
+  assert.deepEqual(enc(p('pipeDelimited', false), ['a|b', 'c']), ['color=a%7Cb|c', { joined: true }])
+  assert.deepEqual(enc(p('spaceDelimited', false), ['a b', 'c']), ['color=a%20b%20c', {}])
+  assert.deepEqual(enc(p('form', true), ['a,b', 'c']), ['color=a%2Cb&color=c', {}])
+  assert.deepEqual(enc(p(undefined, undefined, 'csv'), ['a,b', 'c']), ['color=a%2Cb,c', { joined: true }])
+  assert.deepEqual(enc(p('form', false), 'x,y'), ['color=x%2Cy', {}])
+})
+
+test('deepObject goes deeper in the common form, and says so', () => {
+  const deep = (value: unknown) => {
+    const report: { deep?: boolean } = {}
+    return [styledPairs(p('deepObject', true), value, undefined, report).map(([k, v]) => `${k}=${v}`).join('&'), report.deep ?? false]
+  }
+  assert.deepEqual(deep({ city: 'Oslo', zip: '0150' }), ['color[city]=Oslo&color[zip]=0150', false])
+  assert.deepEqual(deep({ address: { city: 'Oslo' } }), ['color[address][city]=Oslo', true])
+  assert.deepEqual(deep({ ids: [1, 2] }), ['color[ids][]=1&color[ids][]=2', true])
+  assert.deepEqual(deep([{ type: 'eu_vat', value: 'X' }]), ['color[0][type]=eu_vat&color[0][value]=X', true])
 })
 
 test('headers: simple, exploded or not', () => {
