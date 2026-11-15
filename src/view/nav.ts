@@ -72,8 +72,9 @@ function count(nodes: NavNode[]): number {
   return n
 }
 
-function section(id: string, label: string, children: NavNode[], key?: string): NavNode {
-  return { id, label, kind: 'section', children, count: count(children), key, match: lower(label) }
+/** A section counts the items below it, unless `own` says what it holds (workflows, not their steps). */
+function section(id: string, label: string, children: NavNode[], key?: string, own?: number): NavNode {
+  return { id, label, kind: 'section', children, count: own ?? count(children), key, match: lower(label) }
 }
 
 function tagNode(tag: TagNode, labels: NavLabels): NavNode {
@@ -198,7 +199,9 @@ export function navTree(model: Model | null, labels: NavLabels): NavNode[] {
                       match: lower(step.stepId, step.target?.value, step.description)
                     }))
                     return { id: wf.key, key: wf.key, kind: 'group', label: wf.workflowId, detail: wf.summary, children: steps, count: steps.length, match: lower(wf.workflowId, wf.summary) }
-                  })
+                  }),
+                  undefined,
+                  model.model.workflows.length
                 )
               ]
             : []

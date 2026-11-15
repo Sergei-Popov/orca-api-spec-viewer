@@ -61,3 +61,26 @@ test('the recursive link keeps its icon on the line with its name', () => {
   assert.match(rule('.tref'), /align-items: center/)
   assert.match(rule('.tref .icon'), /width: 13px; height: 13px/)
 })
+
+test('a sidebar detail with no room for a few letters is hidden, not cut to one', () => {
+  // Before: `.det` had min-width 0, so "Receive sensor readings" left room for "g." of its channel.
+  // Now label and detail share a wrapping, row-high box; a detail under 5em wraps out of sight.
+  const rule = (selector: string) => css.match(new RegExp(`^${selector.replace(/[.]/g, '\\.')} \\{([^}]*)\\}`, 'm'))?.[1] ?? ''
+  const box = rule('.nrow .txt')
+  assert.match(box, /flex-wrap: wrap/)
+  assert.match(box, /height: var\(--row\)/)
+  assert.match(box, /overflow: hidden/)
+  assert.match(rule('.nrow .txt > span'), /line-height: var\(--row\)/)
+  assert.match(rule('.nrow .det'), /min-width: 5em/)
+})
+
+test('in the narrow layout the Problems button drops its word, so the title keeps its room', () => {
+  // Before: at 550 px the search box and "Problems" squeezed "Bookshelf API" to "Bookshe…".
+  const narrow = css.match(/@media \(max-width: 720px\) \{([\s\S]*?)\n\}/)?.[1] ?? ''
+  assert.match(narrow, /\.bar \.tlabel \{ display: none; \}/)
+  assert.match(narrow, /\.bar \.title \.ver \{ display: none; \}/)
+  // The search box starts at its minimum and only grows into free room, so it never squeezes the title.
+  const rule = (selector: string) => css.match(new RegExp(`^${selector.replace(/[.]/g, '\\.')} \\{([^}]*)\\}`, 'm'))?.[1] ?? ''
+  assert.match(rule('.searchbox'), /flex: 100 1 96px; min-width: 96px; max-width: min\(340px, 34vw\)/)
+  assert.ok(!/(^|[^-])width:/.test(rule('.searchbox')), 'no fixed width')
+})

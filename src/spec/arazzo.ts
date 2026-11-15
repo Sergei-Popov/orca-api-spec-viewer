@@ -30,6 +30,13 @@ export interface ArazzoModel {
   workflows: ArazzoWorkflow[]
 }
 
+/** An Arazzo 1.x runtime expression such as `$inputs.author` or `$statusCode`, not a literal string. */
+const RUNTIME_EXPRESSION = /^\$(?:url|method|statusCode)$|^\$(?:request|response|inputs|outputs|steps|workflows|sourceDescriptions|components)\.[^\s.]/
+
+export function isRuntimeExpression(value: unknown): value is string {
+  return typeof value === 'string' && RUNTIME_EXPRESSION.test(value)
+}
+
 export function buildArazzo(root: Record<string, unknown>): ArazzoModel {
   const sources: ArazzoModel['sources'] = []
   const rawSources = own(root, 'sourceDescriptions')

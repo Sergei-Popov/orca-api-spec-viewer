@@ -1,5 +1,7 @@
 # API Spec Viewer for Orca
 
+![API Spec Viewer: the Bookshelf API's operations by tag, beside Add a book and its request body](images/cover.png)
+
 An interactive API reference for [Orca](https://orca.dev)'s editor tabs. It reads OpenAPI 3.0, 3.1
 and 3.2, Swagger 2.0, AsyncAPI 2.x and 3.x, Arazzo 1.0 and Overlay 1.0 documents in YAML, JSON or
 JSON with comments, and shows them as pages you can browse, search and check, without leaving the

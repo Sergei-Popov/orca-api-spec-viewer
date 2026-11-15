@@ -1,8 +1,9 @@
 import { assert, test } from 'orca/testing'
 import { analyze } from '../analyze'
+import { isRuntimeExpression } from './arazzo'
 import type { AsyncApiModel } from './asyncapi'
 import { detect } from './detect'
-import { exampleFromSchema } from './example'
+import { exampleFromSchema, placeholderUuid } from './example'
 import type { OpenApiModel } from './openapi'
 import { operationDetails, compareStatus } from './operation'
 import { Refs } from './refs'
@@ -146,6 +147,42 @@ test('examples from schemas skip readOnly in requests and stop at recursion', ()
   assert.equal(response.id, '3fa85f64-5717-4562-b3fc-2c963f66afa6')
   assert.equal(response.parent, undefined, 'the recursive parent stops')
   void model
+})
+
+test('each generated UUID in one example is its own, and the next example starts over', () => {
+  const { refs } = openapi(`openapi: 3.1.0
+info: { title: Shelves, version: "1" }
+paths: {}
+components:
+  schemas:
+    Book:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        shelf: { $ref: '#/components/schemas/Shelf' }
+        copies: { type: array, minItems: 2, items: { type: string, format: uuid } }
+    Shelf:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+`)
+  const at = { doc: '', path: [] }
+  const book = exampleFromSchema(refs, { $ref: '#/components/schemas/Book' }, at, { mode: 'response' }) as { id: string; shelf: { id: string }; copies: string[] }
+  assert.equal(book.id, '3fa85f64-5717-4562-b3fc-2c963f66afa6', 'the first is the usual placeholder')
+  assert.notEqual(book.shelf.id, book.id, 'a book and its shelf are not the same record')
+  assert.notEqual(book.copies[0], book.shelf.id)
+  for (const id of [book.id, book.shelf.id, ...book.copies]) assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+  const again = exampleFromSchema(refs, { $ref: '#/components/schemas/Shelf' }, at, { mode: 'response' }) as { id: string }
+  assert.equal(again.id, book.id, 'every example starts from the first placeholder')
+  assert.equal(new Set(Array.from({ length: 2000 }, (_, n) => placeholderUuid(n))).size, 2000)
+})
+
+test('Arazzo runtime expressions are told apart from literal strings', () => {
+  // A step parameter `value: $inputs.author` was shown as the JSON string "$inputs.author".
+  for (const e of ['$inputs.author', '$statusCode', '$url', '$method', '$response.body#/items/0/id', '$steps.findBook.outputs.bookId', '$sourceDescriptions.shelf.listBooks', '$components.parameters.page'])
+    assert.ok(isRuntimeExpression(e), e)
+  for (const v of ['$5', '$', '$inputs', '$inputs.', '$statusCodes', 'inputs.author', 'Bearer {$inputs.token}', ' $inputs.a', 1, null, { a: '$inputs.a' }])
+    assert.ok(!isRuntimeExpression(v), String(v))
 })
 
 test('code samples for curl, fetch, Python and HTTPie', () => {

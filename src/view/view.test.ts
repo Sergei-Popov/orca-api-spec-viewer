@@ -65,6 +65,25 @@ test('the sidebar tree groups operations by tag and lists components', () => {
   assert.deepEqual(collapsed.map((r) => r.node.id), ['overview', 'section:operations', 'section:webhooks', 'section:c:schemas'])
 })
 
+test('the workflows section counts workflows, and each workflow its steps', () => {
+  const a = analyze(`arazzo: 1.0.1
+info: { title: Loans, version: 1.0.0 }
+sourceDescriptions: [{ name: shelf, url: ./shelf.yaml, type: openapi }]
+workflows:
+  - workflowId: borrow
+    steps:
+      - { stepId: find, operationId: listBooks }
+      - { stepId: take, operationId: borrowBook }
+      - { stepId: check, operationId: getBook }
+  - workflowId: giveBack
+    steps:
+      - { stepId: hand, operationId: returnBook }
+`)
+  const tree = navTree(a.model, labels)
+  assert.deepEqual(tree.map((n) => [n.label, n.count ?? null]), [['Overview', null], ['Workflows', 2]])
+  assert.deepEqual(tree[1].children!.map((w) => [w.label, w.count]), [['borrow', 3], ['giveBack', 1]])
+})
+
 test('the filter keeps matching items and opens their groups', () => {
   const tree = navTree(analyze(SPEC).model, labels)
   const rows = flattenNav(tree, new Set(), 'pet')

@@ -2,7 +2,7 @@
 // Overlay actions, and the page for a file that is not an API description.
 
 import { format } from '../i18n'
-import type { ArazzoModel, ArazzoWorkflow, OverlayModel } from '../spec/arazzo'
+import { isRuntimeExpression, type ArazzoModel, type ArazzoWorkflow, type OverlayModel } from '../spec/arazzo'
 import { asyncSecurityItems, asyncServerList, replyOf, withTraits, type AsyncApiModel, type AsyncChannel, type AsyncMessage, type AsyncOperation, type AsyncServer } from '../spec/asyncapi'
 import { familyLabel, type Detection } from '../spec/detect'
 import { exampleFromSchema } from '../spec/example'
@@ -447,7 +447,7 @@ export function workflowPage(ctx: PageCtx, model: ArazzoModel, wf: ArazzoWorkflo
       const table = h('table', { className: 'ptable' })
       for (const p of params) {
         if (!isObject(p)) continue
-        table.append(h('tr', null, h('td', { className: 'name' }, h('span', { className: 'pname' }, str(own(p, 'name')) ?? str(own(p, 'reference')) ?? ''), str(own(p, 'in')) ? h('div', { className: 'pflags' }, h('span', { className: 'flag' }, str(own(p, 'in'))!)) : null), h('td', null, h('code', { className: 'mono' }, valueToText(own(p, 'value')).slice(0, 300)))))
+        table.append(h('tr', null, h('td', { className: 'name' }, h('span', { className: 'pname' }, str(own(p, 'name')) ?? str(own(p, 'reference')) ?? ''), str(own(p, 'in')) ? h('div', { className: 'pflags' }, h('span', { className: 'flag' }, str(own(p, 'in'))!)) : null), h('td', null, h('code', { className: 'mono' }, paramValue(own(p, 'value'))))))
       }
       body.push(h('div', { className: 'sub' }, ctx.t.parameters), h('div', { className: 'box' }, table))
     }
@@ -510,4 +510,9 @@ export function notSpecPage(ctx: PageCtx, detection: Extract<Detection, { spec: 
       h('p', null, ctx.t.notSpecHint)
     )
   )
+}
+
+/** A step parameter's value: a runtime expression as written, anything else as JSON (`"text"`, `1`). */
+function paramValue(value: unknown): string {
+  return (isRuntimeExpression(value) ? value : valueToText(value)).slice(0, 300)
 }
