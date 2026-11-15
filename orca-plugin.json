@@ -12,6 +12,7 @@
   },
   "repository": "https://github.com/Sergei-Popov/orca-api-spec-viewer",
   "license": "MIT AND ISC",
+  "icon": "images/icon.png",
   "engines": {
     "orca": ">=1.4.248"
   },
@@ -21,6 +22,7 @@
       {
         "id": "api-spec",
         "title": "API Spec Viewer",
+        "icon": "icons/api-spec.png",
         "extensions": [
           ".openapi.yaml",
           ".openapi.yml",
