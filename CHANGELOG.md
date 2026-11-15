@@ -22,14 +22,18 @@ All notable changes to this plugin are documented here. The format follows
 - A schema tree with constraints, `allOf` merging, `oneOf`/`anyOf` tabs with the discriminator
   mapping, and recursion shown as links.
 - Given and generated examples, and offline code samples for curl, `fetch`, Python `requests`
-  and HTTPie with copy buttons. Values are quoted for the shell and never read local files; a
+  and HTTPie with copy buttons. Parameters are written as their `style`, `explode` or
+  `collectionFormat` says. Values are quoted for the shell and never read local files; a
   method that is not a valid HTTP method name gets no samples.
+- Component pages list where each component is used.
 - Lazy `$ref` and `$dynamicRef` resolution relative to the nearest `$id`, with cycle detection
   and a report for chains longer than 128 references; external references shown as such, and
   other files can be added by hand for the session.
 - A problems panel with structural checks per version and lint rules, each with its line,
   column and JSON pointer, and a source view that marks them, scrolls sideways and says how much
   of a long line it leaves out.
+- Files with YAML or JSON errors still show what could be read, with a banner that points at
+  the first error.
 - YAML anchors and aliases resolved once, with a warning for an alias inside its own node and an
   error past a million values; the first document of a multi-document YAML file, with a note.
 - Search that lists the best 200 matches and counts all of them.
