@@ -8,7 +8,7 @@ import { operationServers, operationSecurity, requirementScheme, securitySchemes
 import { compareStatus, examplesOf, mediaList, operationDetails, paramView, type BodyView, type ExampleView, type HeaderView, type LinkView, type Located, type MediaView, type OperationDetails, type ParamView, type ResponseView } from '../spec/operation'
 import { getAt, isObject, own, str, toPointer } from '../spec/pointer'
 import type { Loc } from '../spec/refs'
-import { buildRequest, renderSample, sampleLanguages, shellSafe, type SampleLanguage } from '../spec/samples'
+import { buildRequest, commonNotes, renderSample, sampleLanguages, sampleNotes, shellSafe, type SampleLanguage, type SampleNote } from '../spec/samples'
 import {
   banner,
   chip,
@@ -587,11 +587,14 @@ function samplesBox(ctx: PageCtx, model: OpenApiModel, op: Operation, details: O
     return box
   }
   const code = h('div')
+  const languageNotes = h('div')
+  const note = (n: SampleNote) => h('div', { className: 'note' }, svg(icons.info), h('span', null, format(ctx.t.sampleNotes[n.key], { method: request.method, ...n.values })))
   let text = ''
   const draw = (lang: string) => {
     const language = (available.includes(lang as SampleLanguage) ? lang : available[0]) as SampleLanguage
     text = renderSample(language, request)
     code.replaceChildren(codeBlock(text, language === 'curl' || language === 'httpie' ? 'shell' : 'js'))
+    languageNotes.replaceChildren(...sampleNotes(language, request).map(note))
   }
   const langs = available.map((l) => ({ value: l, label: ctx.t.samples[l] ?? l }))
   const saved = ctx.tab('samples#lang', 'curl')
@@ -599,11 +602,13 @@ function samplesBox(ctx: PageCtx, model: OpenApiModel, op: Operation, details: O
   box.append(
     h('div', { className: 'boxhead' }, h('b', null, ctx.t.codeSamples), h('span', { className: 'grow' }), tabs(ctx, 'samples#lang', langs, initial, draw), copyButton(ctx, () => text, ctx.t.copyCode)),
     code,
+    languageNotes,
     h('div', { className: 'note' }, svg(icons.info), h('span', null, ctx.t.noNetwork, request.placeholderHost ? ' ' + ctx.t.placeholderHost : ''))
   )
   if (request.placeholders) box.append(h('div', { className: 'note' }, svg(icons.info), h('span', null, format(ctx.t.samplesFillIn, { names: request.placeholders.join(', ') }))))
   if (request.replaced) box.append(h('div', { className: 'note' }, svg(icons.info), h('span', null, ctx.t.samplesReplaced)))
   if (!shellSafe(request)) box.append(h('div', { className: 'note' }, svg(icons.info), h('span', null, ctx.t.samplesNoShell)))
+  for (const n of commonNotes(request)) box.append(note(n))
   draw(initial)
   return box
 }
