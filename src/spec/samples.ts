@@ -73,8 +73,16 @@ export function buildRequest(model: OpenApiModel, refs: Refs, op: Operation, det
   }
   const cookies: string[] = []
   let path = op.route
+  let queryString: string | undefined
   for (const param of details.params) {
     if (param.stop) continue
+    if (param.in === 'querystring') {
+      // OpenAPI 3.2: one parameter that is the whole query string, written as its media type says.
+      const written = querystringOf(refs, param)
+      if (Array.isArray(written)) request.query.push(...written)
+      else if (written !== undefined) queryString = written
+      continue
+    }
     // Arrays and objects are written as the parameter's style (or collectionFormat) says.
     const value = paramValue(refs, param)
     const style = styleOf(param)
@@ -159,6 +167,7 @@ export function buildRequest(model: OpenApiModel, refs: Refs, op: Operation, det
     return placeholder
   })
   if (placeholders.length > 0) request.placeholders = placeholders
+  if (queryString) request.url += (request.url.includes('?') ? '&' : '?') + queryString
   if ([request.url, request.query, request.headers, request.body].some((v) => illFormed(v))) request.replaced = true
   return request
 }
@@ -247,6 +256,26 @@ function mediaExample(refs: Refs, media: MediaView): unknown {
 function tooLarge(value: unknown): boolean {
   if (typeof value === 'string') return value.length > MAX_BODY
   return jsonText(value, { maxLength: MAX_BODY }).cut
+}
+
+/**
+ * A querystring parameter's example: name–value pairs for a form-encoded object (each tool encodes
+ * them), or the query string itself, from an example's serializedValue or percent-encoded.
+ */
+function querystringOf(refs: Refs, param: ParamView): [string, string][] | string | undefined {
+  const media = param.content[0]
+  const serialized = [...param.examples, ...(media?.examples ?? [])].find((e) => e.serializedValue !== undefined)?.serializedValue
+  if (serialized !== undefined) return serialized.replace(/^\?/, '')
+  const value = paramValue(refs, param) ?? (media ? mediaExample(refs, media) : undefined)
+  if (value === undefined || value === null) return undefined
+  if (media && /x-www-form-urlencoded/i.test(media.type) && isObject(value)) {
+    // As a form is encoded: an array repeats its name.
+    return Object.keys(value).flatMap((name) => {
+      const items = Array.isArray(value[name]) ? (value[name] as unknown[]) : [value[name]]
+      return items.map((item): [string, string] => [name, item !== null && typeof item === 'object' ? compact(item) : String(item)])
+    })
+  }
+  return encodeComponent(typeof value === 'string' ? value : compact(value))
 }
 
 function styleOf(param: ParamView): ParamStyle {

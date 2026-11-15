@@ -185,3 +185,118 @@ components:
   const request = buildRequest(model, a.refs, model.operations[0], operationDetails(model, a.refs, model.operations[0]))
   assert.deepEqual(request.headers, [['X-Key', '<API_KEY>']])
 })
+
+test('responses are optional from 3.1 on, so leaving them out is a note', () => {
+  // Before: a warning on the OAI's own v3.1 non-oauth-scopes example.
+  const spec = (version: string) => `openapi: ${version}
+info: { title: T, version: '1' }
+paths:
+  /a: { get: { summary: no responses } }
+`
+  const severities = (version: string) => analyze(spec(version)).problems.filter((p) => p.rule === 'missing-responses').map((p) => p.severity)
+  assert.deepEqual(severities('3.0.3'), ['error'])
+  assert.deepEqual(severities('3.1.1'), ['info'])
+  assert.deepEqual(severities('3.2.0'), ['info'])
+})
+
+test('a schema used as an allOf part may require what the other parts define', () => {
+  // Before: required-not-defined on the mixin (the official websocket-gemini examples).
+  const spec = `openapi: 3.1.0
+info: { title: T, version: '1' }
+paths:
+  /a: { get: { responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Event' } } } } } } }
+components:
+  schemas:
+    Typed: { type: object, required: [type], properties: { id: { type: string } } }
+    Event:
+      allOf:
+        - $ref: '#/components/schemas/Typed'
+        - { type: object, required: [kind], properties: { type: { type: string } } }
+        - { type: object, properties: { kind: { type: string } } }
+    Lonely: { type: object, required: [missing], properties: { id: { type: string } } }
+`
+  // The inline part that requires `kind` is a mixin too; a schema that is no part still warns.
+  assert.deepEqual(found(spec), ['required-not-defined components/schemas/Lonely/required', 'unused-component components/schemas/Lonely'])
+})
+
+test('OpenAPI 3.2 querystring parameters: checked, and written into the samples', () => {
+  // Before: "“form” is not allowed here; expected ." for a style, no check for a second
+  // querystring or one beside query parameters, and no querystring in the samples.
+  const spec = `openapi: 3.2.0
+info: { title: T, version: '1' }
+servers: [{ url: 'https://api.test' }]
+paths:
+  /form:
+    get:
+      parameters:
+        - { name: q, in: querystring, required: true, content: { application/x-www-form-urlencoded: { example: { term: cat, tag: [a, b] } } } }
+      responses: { '200': { description: ok } }
+  /json:
+    get:
+      parameters:
+        - { name: q, in: querystring, required: true, content: { application/json: { example: { a: 1 } } } }
+      responses: { '200': { description: ok } }
+  /serialized:
+    get:
+      parameters:
+        - name: q
+          in: querystring
+          required: true
+          content: { text/plain: { examples: { one: { serializedValue: '?x=1&y=two' } } } }
+      responses: { '200': { description: ok } }
+  /styled:
+    get:
+      parameters:
+        - { name: q, in: querystring, style: form, explode: true, content: { application/x-www-form-urlencoded: { schema: { type: object } } } }
+      responses: { '200': { description: ok } }
+  /twice:
+    get:
+      parameters:
+        - { name: q1, in: querystring, content: { application/x-www-form-urlencoded: { schema: { type: object } } } }
+        - { name: q2, in: querystring, content: { application/json: { schema: { type: object } } } }
+      responses: { '200': { description: ok } }
+  /mixed:
+    parameters: [{ name: limit, in: query, schema: { type: integer } }]
+    get:
+      parameters:
+        - { name: q, in: querystring, content: { application/json: { schema: { type: object } } } }
+      responses: { '200': { description: ok } }
+  /example:
+    get:
+      responses:
+        '200':
+          description: ok
+          content: { text/plain: { examples: { both: { serializedValue: 'a', externalValue: 'https://example.com/a.txt' } } } }
+`
+  assert.deepEqual(found(spec), [
+    'querystring-field paths//styled/get/parameters/0/style',
+    'querystring-field paths//styled/get/parameters/0/explode',
+    'mutually-exclusive paths//example/get/responses/200/content/text~1plain/examples/both',
+    'querystring-conflict paths//twice/get/parameters/1',
+    'querystring-conflict paths//mixed/get/parameters/0'
+  ].map((p) => p.replace('text~1plain', 'text/plain')))
+  const a = analyze(spec)
+  const model = (a.model as { model: OpenApiModel }).model
+  const request = (route: string) => {
+    const op = model.operations.find((o) => o.route === route)!
+    return buildRequest(model, a.refs, op, operationDetails(model, a.refs, op))
+  }
+  assert.deepEqual(request('/form').query, [['term', 'cat'], ['tag', 'a'], ['tag', 'b']])
+  assert.equal(request('/json').url, 'https://api.test/json?%7B%22a%22%3A1%7D')
+  assert.equal(request('/serialized').url, 'https://api.test/serialized?x=1&y=two')
+})
+
+test('additionalOperations: a standard method in other case is a warning', () => {
+  // Before: "get" and "Query" were errors, though the 3.2 schema forbids only GET, QUERY, ….
+  const spec = `openapi: 3.2.0
+info: { title: T, version: '1' }
+paths:
+  /extra:
+    additionalOperations:
+      GET: { responses: { '200': { description: ok } } }
+      get: { responses: { '200': { description: ok } } }
+      Query: { responses: { '200': { description: ok } } }
+      PURGE: { responses: { '200': { description: ok } } }
+`
+  assert.deepEqual(analyze(spec).problems.map((p) => `${p.severity} ${p.rule} ${p.path.at(-1)}`), ['error bad-key GET', 'warning bad-key get', 'warning bad-key Query'])
+})

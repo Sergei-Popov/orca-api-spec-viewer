@@ -52,6 +52,8 @@ export type RuleCode =
   | 'undeclared-tag'
   | 'unknown-parent-tag'
   | 'tag-parent-cycle'
+  | 'querystring-field'
+  | 'querystring-conflict'
   | 'link-operation'
   | 'multiple-body'
   | 'schema-keyword'

@@ -191,6 +191,12 @@ export function checkOpenApi(ctx: WalkContext, refs: Refs, model: OpenApiModel):
           seen.add(key)
         }
       }
+      // OpenAPI 3.2: one querystring parameter at most, and never with query parameters.
+      const merged = new Map<string, (typeof opLevel)[number]>()
+      for (const p of [...pathLevel, ...opLevel]) merged.set(`${p.in}:${p.name}`, p)
+      const strings = [...merged.values()].filter((p) => p.in === 'querystring')
+      for (const p of strings.slice(1)) ctx.problems.error('querystring-conflict', p.path, { name: p.name, other: strings[0].name, kind: 'twice' })
+      if (strings.length > 0 && [...merged.values()].some((p) => p.in === 'query')) ctx.problems.error('querystring-conflict', strings[0].path, { name: strings[0].name, kind: 'query' })
       const declared = new Map<string, Path>()
       for (const p of [...pathLevel, ...opLevel]) if (p.in === 'path') declared.set(p.name, p.path)
       for (const name of new Set(names)) {

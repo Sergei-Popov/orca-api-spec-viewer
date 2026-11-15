@@ -163,9 +163,19 @@ function checkOne(schema: Record<string, unknown>, path: string[], ctx: WalkCont
       const composed = ['allOf', 'oneOf', 'anyOf', '$ref', 'patternProperties', 'if', 'dependentSchemas'].some((k) => own(schema, k) !== undefined)
       if (isObject(props) && !open && !composed) {
         for (const name of required as string[]) {
-          if (!Object.prototype.hasOwnProperty.call(props, name)) ctx.problems.warn('required-not-defined', [...path, 'required'], { name })
+          if (!Object.prototype.hasOwnProperty.call(props, name)) (ctx.required ??= []).push({ schema, path: [...path, 'required'], name })
         }
       }
+    }
+  }
+
+  const allOf = own(schema, 'allOf')
+  if (Array.isArray(allOf)) {
+    const parts = (ctx.allOfParts ??= { schemas: new Set(), refs: [] })
+    for (const part of allOf) {
+      if (!isObject(part)) continue
+      parts.schemas.add(part)
+      if (typeof part.$ref === 'string') parts.refs.push({ ref: part.$ref, at: path })
     }
   }
 
@@ -377,4 +387,16 @@ function childrenOf(schema: Record<string, unknown>, path: string[], ctx: WalkCo
     if (v !== undefined) add(v, key)
   }
   return out
+}
+
+/** Reports the `required` names no property defines, except in schemas used as `allOf` parts. */
+export function reportRequired(ctx: WalkContext, resolve: (ref: string, at: string[]) => unknown): void {
+  const parts = ctx.allOfParts?.schemas ?? new Set<object>()
+  for (const { ref, at } of ctx.allOfParts?.refs ?? []) {
+    const target = resolve(ref, at)
+    if (isObject(target)) parts.add(target)
+  }
+  for (const { schema, path, name } of ctx.required ?? []) {
+    if (!parts.has(schema)) ctx.problems.warn('required-not-defined', path, { name })
+  }
 }

@@ -10,7 +10,7 @@ import { arazzoDefs, asyncApi2Defs, asyncApi3Defs, overlayDefs } from './defs-as
 import { openApi3Defs, swagger2Defs } from './defs-openapi'
 import { ProblemList } from './problem'
 import { asyncComponentSections, checkArazzo, checkAsyncApi, checkOpenApi, checkRefs, checkUnused, openApiComponentSections, type Usages } from './rules'
-import { checkSchemas } from './schema-rules'
+import { checkSchemas, reportRequired } from './schema-rules'
 import { levelOf, visitObject, type ObjectDef, type WalkContext } from './walker'
 
 export type LintModel =
@@ -52,6 +52,10 @@ export function lintDocument(root: Record<string, unknown>, family: Family, refs
   }
   visitObject(root, 'Root', [], ctx)
   checkSchemas(ctx)
+  reportRequired(ctx, (ref, at) => {
+    const resolution = refs.resolve(ref, '', false, at)
+    return resolution.kind === 'local' ? refs.follow(resolution.value, resolution.loc).value : undefined
+  })
   const used = checkRefs(ctx, refs)
   if (lintModel.kind === 'openapi') {
     checkOpenApi(ctx, refs, lintModel.model)

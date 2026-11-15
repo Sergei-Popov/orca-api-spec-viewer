@@ -374,6 +374,8 @@ const en = {
     'undeclared-tag': 'Tag “{name}” is used but not declared in the document’s tags.',
     'unknown-parent-tag': 'Parent tag “{name}” is not declared.',
     'tag-parent-cycle': 'Tag parents form a cycle of {count}: {tags}. These tags are shown at the top level.',
+    'querystring-field': '“{field}” cannot be used with in: querystring: the media type in content says how the query string is written.',
+    'querystring-conflict': '“{name}” is in: querystring, so the operation can have no other querystring or query parameter.',
     'link-operation': 'The link names operationId “{id}”, which does not exist.',
     'multiple-body': 'An operation can have only one body; {what} parameters conflict here.',
     'schema-keyword': '“{keyword}” is not part of {version} schemas.',
@@ -388,7 +390,8 @@ const en = {
     'path-query': 'A path must not contain a query string: “{key}”.',
     status: 'Not an HTTP status code: “{key}”.',
     method: '“{key}” is a standard method; declare it as a field of the path item.',
-    'method-token': '“{key}” is not a valid HTTP method name: use letters, digits and !#$%&\'*+-.^_`|~ only.'
+    'method-token': '“{key}” is not a valid HTTP method name: use letters, digits and !#$%&\'*+-.^_`|~ only.',
+    'method-case': '“{key}” is not {method}: methods are case-sensitive. For {method}, declare it as a field of the path item.'
   } as Record<string, string>,
   duplicateEnum: 'The value {value} is listed twice.'
 }
@@ -744,6 +747,8 @@ const ru: Strings = {
     'undeclared-tag': 'Тег «{name}» используется, но не объявлен в tags документа.',
     'unknown-parent-tag': 'Родительский тег «{name}» не объявлен.',
     'tag-parent-cycle': 'Родительские теги замкнуты в цикл ({count}): {tags}. Эти теги показаны на верхнем уровне.',
+    'querystring-field': '«{field}» нельзя использовать с in: querystring: как записана строка запроса, задаёт тип содержимого в content.',
+    'querystring-conflict': '«{name}» — параметр in: querystring, поэтому других параметров querystring и query у операции быть не может.',
     'link-operation': 'Ссылка указывает на operationId «{id}», которого нет.',
     'multiple-body': 'У операции может быть только одно тело; здесь мешают параметры {what}.',
     'schema-keyword': '«{keyword}» не входит в схемы {version}.',
@@ -758,7 +763,8 @@ const ru: Strings = {
     'path-query': 'В пути не должно быть строки запроса: «{key}».',
     status: 'Это не код состояния HTTP: «{key}».',
     method: '«{key}» — стандартный метод; объявите его полем элемента пути.',
-    'method-token': '«{key}» — недопустимое имя метода HTTP: допустимы только буквы, цифры и !#$%&\'*+-.^_`|~.'
+    'method-token': '«{key}» — недопустимое имя метода HTTP: допустимы только буквы, цифры и !#$%&\'*+-.^_`|~.',
+    'method-case': '«{key}» — это не {method}: регистр в именах методов важен. Для {method} объявите его полем элемента пути.'
   },
   duplicateEnum: 'Значение {value} указано дважды.'
 }

@@ -320,12 +320,23 @@ function paramTable(ctx: PageCtx, params: ParamView[], idBase: string): HTMLElem
       const desc = markdown(ctx, p.description)
       if (desc) cell.append(desc)
     }
-    for (const media of p.content) append(cell, h('div', { className: 'sub mono' }, media.type), media.schema ? schemaTree(ctx, media.schema.value, media.schema.loc, `${idBase}/${p.name}/${media.type}`) : null)
+    for (const media of p.content) {
+      append(cell, h('div', { className: 'sub mono' }, media.type), media.schema ? schemaTree(ctx, media.schema.value, media.schema.loc, `${idBase}/${p.name}/${media.type}`) : null)
+      if (!p.hasExample && p.examples.length === 0) append(cell, exampleLine(ctx, media.examples))
+    }
     if (p.hasExample) cell.append(h('div', { className: 'tvals' }, ctx.t.example + ':', h('code', null, valueToText(p.example).slice(0, 300))))
-    else if (p.examples.length > 0 && p.examples[0].hasValue) cell.append(h('div', { className: 'tvals' }, ctx.t.example + ':', h('code', null, valueToText(p.examples[0].value).slice(0, 300))))
+    else append(cell, exampleLine(ctx, p.examples))
     table.append(h('tr', null, nameCell, cell))
   }
   return table
+}
+
+/** The first example with something to show: 3.2's serialized form as written, or the value. */
+function exampleLine(ctx: PageCtx, examples: ExampleView[]): HTMLElement | null {
+  const ex = examples.find((e) => e.serializedValue !== undefined || e.hasValue)
+  if (!ex) return null
+  const text = ex.serializedValue ?? valueToText(ex.value)
+  return h('div', { className: 'tvals' }, ctx.t.example + ':', h('code', null, text.slice(0, 300)))
 }
 
 function headerTable(ctx: PageCtx, headers: HeaderView[], idBase: string): HTMLElement {

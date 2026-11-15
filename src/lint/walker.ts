@@ -52,6 +52,13 @@ export interface WalkContext {
   /** While a schema is checked: the level of its rules when it is not the document's (see formatLevel). */
   schemaLevel?: number
   /**
+   * `required` names missing from `properties`, reported after the walk unless the schema is an
+   * `allOf` part (a mixin that requires what the other parts define).
+   */
+  required?: { schema: object; path: string[]; name: string }[]
+  /** The `allOf` parts seen: the schemas themselves, and the references to others. */
+  allOfParts?: { schemas: Set<object>; refs: { ref: string; at: string[] }[] }
+  /**
    * Parts no table describes, where a `$ref` still counts as a use of what it names: `x-…`
    * extensions (such as Redoc's `x-webhooks`) and AsyncAPI bindings.
    */
