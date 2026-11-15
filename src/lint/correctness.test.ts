@@ -372,6 +372,29 @@ components:
   assert.deepEqual(v30.prop('nick'), { type: 'string', maxLength: 40 })
 })
 
+test('OpenAPI 3.1+: a callback reference’s summary and description add no callbacks', () => {
+  // Before (a regression of the sibling fix): the operation listed `onEvent description` and
+  // `onEvent summary` as callback expressions, since a Callback Object is a map of expressions.
+  const a = analyze(`openapi: 3.1.0
+info: { title: T, version: '1' }
+paths:
+  /subscribe:
+    post:
+      callbacks:
+        onEvent: { $ref: '#/components/callbacks/Event', description: Sent when something happens, summary: Event callback }
+      responses: { '200': { description: ok } }
+components:
+  callbacks:
+    Event:
+      '{$request.body#/url}':
+        post: { responses: { '200': { description: ok } } }
+`)
+  const model = (a.model as { model: OpenApiModel }).model
+  const details = operationDetails(model, a.refs, model.operations[0])
+  assert.deepEqual(details.callbacks.map((c) => `${c.name} ${c.expression}`), ['onEvent {$request.body#/url}'])
+  assert.deepEqual(a.problems.map((p) => p.rule), [])
+})
+
 test('AsyncAPI traits are merged into messages and operations', () => {
   // Before: every streetlights message lacked the commonHeaders trait's headers, and operation
   // trait bindings were not shown.

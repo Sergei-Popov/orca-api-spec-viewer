@@ -251,7 +251,7 @@ export class Refs {
     const done = (extra: Omit<Followed, 'loc' | 'via'>): Followed => ({ ...extra, loc: scope && scope !== at.scope ? { ...at, scope } : at, via })
     for (let hop = 0; ; hop++) {
       const ref = refOf(current)
-      if (!ref) return done({ value: this.options.siblings ? this.withSiblings(current, referring, isSchemaPlace(at.path)) : current })
+      if (!ref) return done({ value: this.options.siblings && !isCallbackPlace(at.path) && !isCallbackPlace(loc.path) ? this.withSiblings(current, referring, isSchemaPlace(at.path)) : current })
       referring.push(current as Record<string, unknown>)
       // A long chain is not a cycle: it stops with its own reason.
       if (hop >= MAX_HOPS) return done({ value: current, stop: { kind: 'missing', ref: ref.ref, reason: 'too-long' } })
@@ -320,6 +320,14 @@ function isSchemaPlace(path: readonly string[]): boolean {
   if (path[0] === 'components' && NOT_SCHEMAS.has(path[1])) return inside(2)
   if (path[0] === 'paths' || path[0] === 'webhooks') return inside(1)
   return true
+}
+
+/**
+ * A Callback Object, which is a map of expressions with no summary or description of its own: a
+ * Reference Object's summary and description have no effect there (OpenAPI 3.1 §4.8.23).
+ */
+function isCallbackPlace(path: readonly string[]): boolean {
+  return path.length >= 2 && path[path.length - 2] === 'callbacks' && !isSchemaPlace(path)
 }
 
 /** A field beside `$ref` that says something about the target (not `$id`, `$defs`, …). */
