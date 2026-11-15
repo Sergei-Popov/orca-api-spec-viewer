@@ -1,32 +1,73 @@
 {
   "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-plugin.v2.schema.json",
   "manifestVersion": 2,
+  "execution": "sandboxed-ui",
   "id": "api-spec-viewer",
   "name": "API Spec Viewer",
   "version": "0.1.0",
-  "description": "Interactive API reference for OpenAPI 3.x, Swagger 2.0 and AsyncAPI files in YAML or JSON with any file name: operations by tag, schemas, examples, validation and search. Offline.",
+  "description": "An interactive API reference in Orca's editor tabs for OpenAPI 3.0, 3.1 and 3.2, Swagger 2.0, AsyncAPI 2 and 3, Arazzo and Overlay files in YAML or JSON: operations by tag, nested schemas, examples, offline code samples, a problems panel with line numbers, and search. Read-only and offline. Independent; not affiliated with the OpenAPI Initiative, SmartBear or the AsyncAPI Initiative.",
+  "author": {
+    "name": "Sergei Popov",
+    "url": "https://github.com/Sergei-Popov"
+  },
+  "repository": "https://github.com/Sergei-Popov/orca-api-spec-viewer",
+  "license": "MIT AND ISC",
   "engines": {
     "orca": ">=1.4.248"
   },
-  "execution": "sandboxed-ui",
   "pluginApi": 1,
   "contributes": {
     "customEditors": [
       {
-        "id": "api-spec-viewer",
+        "id": "api-spec",
         "title": "API Spec Viewer",
         "extensions": [
-          ".api-spec-viewer"
+          ".openapi.yaml",
+          ".openapi.yml",
+          ".openapi.json",
+          ".swagger.yaml",
+          ".swagger.yml",
+          ".swagger.json",
+          ".oas.yaml",
+          ".oas.yml",
+          ".oas.json",
+          ".oas3.yaml",
+          ".oas3.yml",
+          ".oas3.json",
+          ".asyncapi.yaml",
+          ".asyncapi.yml",
+          ".asyncapi.json",
+          ".arazzo.yaml",
+          ".arazzo.yml",
+          ".arazzo.json",
+          ".overlay.yaml",
+          ".overlay.yml",
+          ".overlay.json",
+          ".yaml",
+          ".yml",
+          ".json",
+          ".jsonc"
         ],
-        "entry": "editor/main.ts",
+        "filenames": [
+          "openapi.yaml",
+          "openapi.yml",
+          "openapi.json",
+          "swagger.yaml",
+          "swagger.yml",
+          "swagger.json",
+          "asyncapi.yaml",
+          "asyncapi.yml",
+          "asyncapi.json",
+          "arazzo.yaml",
+          "arazzo.yml",
+          "arazzo.json"
+        ],
+        "entry": "src/editor.ts",
+        "priority": "default",
+        "contentKind": "text",
         "frame": "isolated"
       }
     ]
   },
-  "author": {
-    "name": "Сергей Попов",
-    "url": "https://github.com/Sergei-Popov"
-  },
-  "repository": "https://github.com/Sergei-Popov/orca-api-spec-viewer",
-  "license": "MIT"
+  "capabilities": []
 }
