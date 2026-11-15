@@ -68,6 +68,32 @@ export function typeText(ctx: PageCtx, schema: unknown, loc: Loc, depth = 0): st
     const kinds = new Set((own(schema, 'enum') as unknown[]).map((v) => (v === null ? 'null' : typeof v)))
     return [...kinds].join(' | ')
   }
+  return depth < 3 ? compositionText(ctx, schema, loc, depth) : ''
+}
+
+const MAX_VARIANTS = 4
+
+/**
+ * A composition without a type, by its variants: `string | customer | deleted_customer` for
+ * anyOf or oneOf, `A & B` for allOf, and `| null` where OpenAPI 3.0's `nullable` is set (the
+ * flag beside it says so too).
+ */
+function compositionText(ctx: PageCtx, schema: Record<string, unknown>, loc: Loc, depth: number): string {
+  for (const key of ['oneOf', 'anyOf', 'allOf'] as const) {
+    const list = own(schema, key)
+    if (!Array.isArray(list) || list.length === 0) continue
+    const names: string[] = []
+    list.forEach((variant, index) => {
+      const r = refOf(variant)
+      const text = r ? refName(r.ref) : typeText(ctx, variant, child(loc, key, String(index)), depth + 1)
+      if (text && !names.includes(text)) names.push(text)
+    })
+    if (names.length === 0) continue
+    const shown = names.length > MAX_VARIANTS ? [...names.slice(0, MAX_VARIANTS), '…'] : names
+    let text = shown.join(key === 'allOf' ? ' & ' : ' | ')
+    if (own(schema, 'nullable') === true && !names.includes('null')) text = key === 'allOf' && shown.length > 1 ? `(${text}) | null` : `${text} | null`
+    return text
+  }
   return ''
 }
 

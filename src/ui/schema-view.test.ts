@@ -75,7 +75,9 @@ components:
     const path = ['components', 'schemas', 'Pet', 'properties', name]
     return typeText(ctx, getAt(a.parsed.value, path), { doc: '', path })
   }
-  for (const name of ['owner', 'anything']) assert.ok(!type(name).includes('null'), `${name}: ${type(name)}`)
+  // Not `null` alone: the composition's variant, then null.
+  assert.equal(type('owner'), 'User | null')
+  assert.equal(type('anything'), '')
   // Read from the enum's values, which do include null.
   assert.equal(type('status'), 'string | null')
   assert.equal(type('name'), 'string | null')
@@ -86,6 +88,45 @@ components:
   // A wrong value is still reported when a type is given.
   const wrong = analyze(spec.replace('enum: [1, 2, null]', 'enum: [1, two, null]'))
   assert.deepEqual(wrong.problems.map((p) => p.rule), ['invalid-enum'])
+})
+
+test('a composition without a type shows its variants', () => {
+  // Before: 633 Stripe properties (`customer`, `business_profile`) and 106 in GitHub 3.0 showed no
+  // type in the collapsed row; the variants appeared only when expanded.
+  const spec = `openapi: 3.0.3
+info: { title: T, version: '1' }
+paths: {}
+components:
+  schemas:
+    customer: { type: object, properties: { id: { type: string } } }
+    deleted_customer: { type: object, properties: { deleted: { type: boolean } } }
+    profile: { type: object }
+    Charge:
+      type: object
+      properties:
+        customer: { anyOf: [{ maxLength: 5000, type: string }, { $ref: '#/components/schemas/customer' }, { $ref: '#/components/schemas/deleted_customer' }], nullable: true }
+        business_profile: { anyOf: [{ $ref: '#/components/schemas/profile' }], nullable: true }
+        both: { allOf: [{ $ref: '#/components/schemas/customer' }, { $ref: '#/components/schemas/profile' }] }
+        both_or_null: { allOf: [{ $ref: '#/components/schemas/customer' }, { $ref: '#/components/schemas/profile' }], nullable: true }
+        ids: { oneOf: [{ type: string }, { type: array, items: { type: string } }] }
+        many: { oneOf: [{ type: string }, { type: integer }, { type: boolean }, { type: array, items: {} }, { type: object, properties: {} }] }
+        same: { oneOf: [{ type: string, format: date }, { type: string, format: date-time }] }
+        loose: { anyOf: [{ required: [id] }] }
+`
+  const a = analyze(spec)
+  const ctx = { t: stringsFor('en'), refs: a.refs } as unknown as PageCtx
+  const type = (name: string) => {
+    const path = ['components', 'schemas', 'Charge', 'properties', name]
+    return typeText(ctx, getAt(a.parsed.value, path), { doc: '', path })
+  }
+  assert.equal(type('customer'), 'string | customer | deleted_customer | null')
+  assert.equal(type('business_profile'), 'profile | null')
+  assert.equal(type('both'), 'customer & profile')
+  assert.equal(type('both_or_null'), '(customer & profile) | null')
+  assert.equal(type('ids'), 'string | array<string>')
+  assert.equal(type('many'), 'string | integer | boolean | array<any> | …')
+  assert.equal(type('same'), 'string')
+  assert.equal(type('loose'), '')
 })
 
 test('itemSchema is labelled as one item, and an anchor name has no slash', () => {
