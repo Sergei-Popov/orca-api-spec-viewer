@@ -15,28 +15,28 @@
   "icon": "images/icon.png",
   "cover": {
     "path": "images/cover.png",
-    "alt": "See a whole operation at once: Add a book, POST /books, with its request schema, oneOf tabs, a curl sample and the request example."
+    "alt": "The Bookshelf API's 10 operations by tag with coloured method badges, beside Add a book, POST /books, and its request body."
   },
   "screenshots": [
     {
-      "path": "images/operation-light.png",
-      "alt": "Parameters, samples and examples side by side: List books, GET /books, with cursor, limit and author, a curl sample and a 200 response."
+      "path": "images/shot-1-problems.png",
+      "alt": "A draft spec's 4 errors and 1 warning, each with its line and column, and the source at line 207: a duplicate operationId."
     },
     {
-      "path": "images/schema-dark.png",
-      "alt": "Nested schemas open on demand and recursion stays a link: the Book schema with its shelf, Recursive: Book and a generated example."
+      "path": "images/shot-2-operation.png",
+      "alt": "Add a book's code samples: a curl POST to /v2/books built from the examples, with JavaScript, Python and HTTPie tabs to copy."
     },
     {
-      "path": "images/problems-light.png",
-      "alt": "Problems with line and column: 4 errors and 1 warning, such as operationId “listBooks” is already used by GET /books at Ln 207, Col 7."
+      "path": "images/shot-3-schema.png",
+      "alt": "The Book schema as a tree, its nested shelf open: each field's type, format, required and read-only flags, and examples."
     },
     {
-      "path": "images/asyncapi-dark.png",
-      "alt": "AsyncAPI 3 too: the send operation Open or close the vents, its Vent command message with opening and reason, and the Alert reply."
+      "path": "images/shot-4-asyncapi.png",
+      "alt": "Greenhouse Sensors, AsyncAPI 3.0.0: Open or close the vents sends a Vent command; its Alert reply comes on greenhouse/alerts."
     },
     {
-      "path": "images/search-light.png",
-      "alt": "Find anything with ⌘F: searching loan lists the Loan schema, the loans tag, Borrow a book and Return a book, matches highlighted."
+      "path": "images/shot-5-arazzo.png",
+      "alt": "Borrow a book in 3 steps: findBook, borrow and confirm, each naming the operation it calls. Shown in Orca's light theme."
     }
   ],
   "engines": {
