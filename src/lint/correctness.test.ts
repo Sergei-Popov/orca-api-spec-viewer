@@ -2,10 +2,13 @@
 // viewer: each fixture is the smallest document that showed one.
 import { assert, test } from 'orca/testing'
 import { analyze } from '../analyze'
+import { asyncSecurityItems, replyOf, type AsyncApiModel } from '../spec/asyncapi'
 import { exampleFromSchema } from '../spec/example'
 import type { OpenApiModel } from '../spec/openapi'
 import { operationDetails } from '../spec/operation'
+import { isObject } from '../spec/pointer'
 import { buildRequest } from '../spec/samples'
+import { flowScopes, neededScopes, schemeLocation } from '../ui/openapi-pages'
 
 const found = (text: string) => analyze(text).problems.map((p) => `${p.rule} ${p.path.join('/')}`)
 
@@ -367,4 +370,126 @@ components:
   assert.equal(v30.response, 'Original response')
   assert.ok('id' in v30.example)
   assert.deepEqual(v30.prop('nick'), { type: 'string', maxLength: 40 })
+})
+
+test('AsyncAPI traits are merged into messages and operations', () => {
+  // Before: every streetlights message lacked the commonHeaders trait's headers, and operation
+  // trait bindings were not shown.
+  const v3 = `asyncapi: 3.0.0
+info: { title: T, version: '1' }
+channels:
+  lights:
+    address: lights
+    messages:
+      measured: { $ref: '#/components/messages/measured' }
+operations:
+  receiveLight:
+    action: receive
+    channel: { $ref: '#/channels/lights' }
+    traits: [{ $ref: '#/components/operationTraits/mqtt' }]
+    bindings: { mqtt: { retain: true } }
+components:
+  messages:
+    measured:
+      name: measured
+      contentType: application/json
+      traits: [{ $ref: '#/components/messageTraits/commonHeaders' }, { contentType: text/plain, summary: From a trait }]
+      payload: { type: object }
+  messageTraits:
+    commonHeaders:
+      headers: { type: object, properties: { my-app-header: { type: integer } } }
+  operationTraits:
+    mqtt:
+      bindings: { mqtt: { qos: 1, retain: false } }
+`
+  const model3 = (analyze(v3).model as { model: AsyncApiModel }).model
+  const msg3 = model3.channels[0].messages[0].value
+  assert.deepEqual(msg3.headers, { type: 'object', properties: { 'my-app-header': { type: 'integer' } } })
+  // In 3.x the message's own fields win over its traits'.
+  assert.equal(msg3.contentType, 'application/json')
+  assert.equal(msg3.summary, 'From a trait')
+  assert.deepEqual(model3.operations[0].op.bindings, { mqtt: { qos: 1, retain: true } })
+  assert.deepEqual(model3.operations[0].messages[0].value.headers, msg3.headers)
+
+  const v2 = `asyncapi: 2.6.0
+info: { title: T, version: '1' }
+channels:
+  lights:
+    subscribe:
+      traits: [{ $ref: '#/components/operationTraits/kafka' }]
+      message:
+        contentType: application/json
+        traits: [{ $ref: '#/components/messageTraits/commonHeaders' }]
+        payload: { type: object }
+components:
+  messageTraits:
+    commonHeaders:
+      contentType: text/plain
+      headers: { type: object, properties: { my-app-header: { type: integer } } }
+  operationTraits:
+    kafka:
+      bindings: { kafka: { clientId: { type: string } } }
+`
+  const model2 = (analyze(v2).model as { model: AsyncApiModel }).model
+  const msg2 = model2.operations[0].messages[0].value
+  assert.ok(isObject(msg2.headers))
+  // In 2.x a trait is applied over the message.
+  assert.equal(msg2.contentType, 'text/plain')
+  assert.deepEqual(model2.operations[0].op.bindings, { kafka: { clientId: { type: 'string' } } })
+})
+
+test('AsyncAPI 3 security: inline schemes, availableScopes, scopes needed, and replies', () => {
+  // Before: an inline scheme was shown as its keys ("type + description + flows + scopes"), a flow's
+  // availableScopes and an httpApiKey's name and place were not shown, and a reply without
+  // messages showed no messages.
+  const spec = `asyncapi: 3.0.0
+info: { title: T, version: '1' }
+servers:
+  production:
+    host: broker.example.com
+    protocol: mqtt
+    security:
+      - $ref: '#/components/securitySchemes/key'
+      - type: oauth2
+        flows: { implicit: { authorizationUrl: 'https://auth.example.com', availableScopes: { 'lights:on': Switch on } } }
+        scopes: ['lights:on']
+channels:
+  ping: { address: ping, messages: { ping: { payload: { type: string } } } }
+  pong:
+    address: pong
+    messages:
+      pong: { payload: { type: string } }
+      error: { payload: { type: object } }
+operations:
+  ping:
+    action: send
+    channel: { $ref: '#/channels/ping' }
+    reply: { channel: { $ref: '#/channels/pong' } }
+  pingOne:
+    action: send
+    channel: { $ref: '#/channels/ping' }
+    reply: { channel: { $ref: '#/channels/pong' }, messages: [{ $ref: '#/channels/pong/messages/pong' }] }
+components:
+  securitySchemes:
+    key: { type: httpApiKey, in: header, name: X-Key }
+    user: { type: apiKey, in: user }
+`
+  const a = analyze(spec)
+  assert.deepEqual(a.problems.map((p) => p.rule), [])
+  const model = (a.model as { model: AsyncApiModel }).model
+  const items = asyncSecurityItems(model.family, model.servers[0].value.security)
+  assert.deepEqual(items.map((i) => `${i.kind} ${i.name}`), ['ref key', 'inline oauth2'])
+  const inline = items[1] as { value: Record<string, unknown> }
+  const flows = inline.value.flows as Record<string, Record<string, unknown>>
+  assert.deepEqual(flowScopes(flows.implicit), { 'lights:on': 'Switch on' })
+  assert.deepEqual(neededScopes(inline.value), ['lights:on'])
+  const schemes = (model.root.components as Record<string, Record<string, Record<string, unknown>>>).securitySchemes
+  assert.equal(schemeLocation(schemes.key), 'header · X-Key')
+  assert.equal(schemeLocation(schemes.user), 'user')
+  // 2.x lists requirements by name, with scopes.
+  assert.deepEqual(asyncSecurityItems('asyncapi2', [{ oauth: ['write'] }]), [{ kind: 'requirement', name: 'oauth', scopes: ['write'] }])
+  const reply = (id: string) => replyOf(a.refs, model, model.operations.find((o) => o.id === id)!)!
+  assert.equal(reply('ping').channel?.id, 'pong')
+  assert.deepEqual(reply('ping').messages.map((m) => m.name), ['pong', 'error'])
+  assert.deepEqual(reply('pingOne').messages.map((m) => m.name), ['pong'])
 })

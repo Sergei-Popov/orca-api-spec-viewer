@@ -115,12 +115,32 @@ export function variablesTable(ctx: PageCtx, variables: Record<string, Record<st
   return table
 }
 
+/** Where an API key goes: `header · X-Key`. AsyncAPI's httpApiKey is OpenAPI's apiKey; its own
+ * apiKey is sent as the user or password, with no name. */
+export function schemeLocation(scheme: Record<string, unknown>): string | null {
+  const type = str(own(scheme, 'type'))
+  if (type !== 'apiKey' && type !== 'httpApiKey') return null
+  return [str(own(scheme, 'in')), str(own(scheme, 'name'))].filter(Boolean).join(' · ') || null
+}
+
+/** An OAuth flow's scopes: `scopes` in OpenAPI and AsyncAPI 2, `availableScopes` in AsyncAPI 3. */
+export function flowScopes(flow: Record<string, unknown>): unknown {
+  return own(flow, 'scopes') ?? own(flow, 'availableScopes')
+}
+
+/** AsyncAPI 3: the scopes a server or operation needs, listed on its scheme. */
+export function neededScopes(scheme: Record<string, unknown>): string[] {
+  const scopes = own(scheme, 'scopes')
+  return Array.isArray(scopes) ? scopes.map(String) : []
+}
+
 export function securitySchemeCard(ctx: PageCtx, name: string, raw: unknown, loc: Loc): HTMLElement {
   const followed = ctx.refs.follow(raw, loc)
   const scheme = isObject(followed.value) ? followed.value : {}
   const type = str(own(scheme, 'type')) ?? ''
   const pairs: [Child, Child][] = [[ctx.t.type, h('span', { className: 'mono' }, type)]]
-  if (type === 'apiKey') pairs.push(['in', h('span', { className: 'mono' }, `${str(own(scheme, 'in')) ?? ''} · ${str(own(scheme, 'name')) ?? ''}`)])
+  const where = schemeLocation(scheme)
+  if (where) pairs.push(['in', h('span', { className: 'mono' }, where)])
   if (type === 'http') {
     pairs.push(['scheme', h('span', { className: 'mono' }, str(own(scheme, 'scheme')) ?? '')])
     if (str(own(scheme, 'bearerFormat'))) pairs.push(['bearerFormat', h('span', { className: 'mono' }, str(own(scheme, 'bearerFormat'))!)])
@@ -139,8 +159,10 @@ export function securitySchemeCard(ctx: PageCtx, name: string, raw: unknown, loc
   const flows = own(scheme, 'flows')
   const scopesOf = (value: unknown): HTMLElement | null => {
     if (!isObject(value) || Object.keys(value).length === 0) return null
-    const table = h('table', { className: 'ptable' })
-    for (const scope of Object.keys(value).slice(0, 200)) table.append(h('tr', null, h('td', { className: 'name' }, h('span', { className: 'pname' }, scope)), h('td', null, String(value[scope] ?? ''))))
+    const table = h('table', { className: 'ptable scopes' })
+    // Scope names break after ':', '/' or '.', not inside a word.
+    const breakable = (scope: string) => scope.split(/(?<=[:/.])/).flatMap((part, i) => (i === 0 ? [part] : [h('wbr'), part]))
+    for (const scope of Object.keys(value).slice(0, 200)) table.append(h('tr', null, h('td', { className: 'name' }, h('span', { className: 'pname' }, ...breakable(scope))), h('td', null, String(value[scope] ?? ''))))
     return table
   }
   if (isObject(flows)) {
@@ -152,13 +174,15 @@ export function securitySchemeCard(ctx: PageCtx, name: string, raw: unknown, loc
       body.push(h('h3', { className: 'h' }, h('span', { className: 'mono' }, flowName)))
       const fkv = kvList(flowPairs)
       if (fkv) body.push(fkv)
-      const scopes = scopesOf(own(flow, 'scopes'))
+      const scopes = scopesOf(flowScopes(flow))
       if (scopes) body.push(h('div', { className: 'sub', style: 'margin-top:6px' }, ctx.t.scopes), h('div', { className: 'box', style: 'margin-top:4px' }, scopes))
     }
   } else {
-    const scopes = scopesOf(own(scheme, 'scopes'))
+    const scopes = Array.isArray(own(scheme, 'scopes')) ? null : scopesOf(own(scheme, 'scopes'))
     if (scopes) body.push(h('div', { className: 'sub', style: 'margin-top:6px' }, ctx.t.scopes), h('div', { className: 'box', style: 'margin-top:4px' }, scopes))
   }
+  const needed = neededScopes(scheme)
+  if (needed.length > 0) body.push(kvList([[ctx.t.requiredScopes, h('span', { className: 'mono' }, needed.join(', '))]]))
   return h('div', { className: 'box' }, h('div', { className: 'boxhead' }, svg(icons.lock), h('b', null, name)), h('div', { className: 'boxbody' }, ...body))
 }
 
@@ -532,7 +556,7 @@ function exampleBox(ctx: PageCtx, id: string, title: Child, choices: { value: st
       if (ex.external) body.append(h('div', { className: 'boxbody' }, format(ctx.t.externalExample, { url: '' }), externalLink(ctx, ex.external)))
       else body.append(codeBlock(ex.text, /json|\*\/\*|^$/i.test(choice.media.type) || ex.generated ? 'json' : 'text', ex.cut))
       if (ex.cut) body.append(cutNote(ctx))
-      if (ex.generated) body.append(h('div', { className: 'note' }, svg(icons.info), ctx.t.generatedExample))
+      if (ex.generated) body.append(h('div', { className: 'note' }, svg(icons.info), ex.label))
     }
     if (list.length > 1) {
       sub.append(tabs(ctx, id + '#ex:' + choice.value, list.map((ex, index) => ({ value: String(index), label: ex.label })), '0', (v) => show(Number(v))))

@@ -93,9 +93,36 @@ function child(loc: Loc, ...segments: string[]): Loc {
   return { ...loc, path: [...loc.path, ...segments] }
 }
 
-function message(refs: Refs, raw: unknown, at: Loc, name: string): AsyncMessage {
+/** JSON Merge Patch (RFC 7386): objects merge, `null` removes, anything else replaces. */
+function mergePatch(target: unknown, patch: unknown): unknown {
+  if (!isObject(patch)) return patch
+  const out: Record<string, unknown> = isObject(target) ? { ...target } : {}
+  for (const key of Object.keys(patch)) {
+    if (patch[key] === null) delete out[key]
+    else out[key] = mergePatch(out[key], patch[key])
+  }
+  return out
+}
+
+/**
+ * A message or operation with its traits merged in, as JSON Merge Patches in their order. In 2.x
+ * each trait is applied over the object; in 3.x a trait never overrides the object's own fields.
+ */
+export function withTraits(refs: Refs, value: Record<string, unknown>, loc: Loc, family: Family): Record<string, unknown> {
+  const traits = own(value, 'traits')
+  if (!Array.isArray(traits) || traits.length === 0) return value
+  let merged: unknown = family === 'asyncapi3' ? {} : value
+  traits.slice(0, 50).forEach((trait, index) => {
+    const followed = refs.follow(trait, child(loc, 'traits', String(index)))
+    if (isObject(followed.value)) merged = mergePatch(merged, followed.value)
+  })
+  if (family === 'asyncapi3') merged = mergePatch(merged, value)
+  return isObject(merged) ? merged : value
+}
+
+function message(refs: Refs, raw: unknown, at: Loc, name: string, family: Family): AsyncMessage {
   const followed = refs.follow(raw, at)
-  const value = isObject(followed.value) ? followed.value : {}
+  const value = isObject(followed.value) ? withTraits(refs, followed.value, followed.loc, family) : {}
   // A referenced message is known by the key it was defined under.
   const fallback = followed.via.length > 0 ? (followed.loc.path.at(-1) ?? name) : name
   const label = str(own(value, 'name')) ?? str(own(value, 'title')) ?? fallback
@@ -175,14 +202,15 @@ export function buildAsyncApi(root: Record<string, unknown>, family: Family, ref
       if (family === 'asyncapi3') {
         const messages = own(value, 'messages')
         if (isObject(messages)) {
-          for (const name of Object.keys(messages)) channel.messages.push(message(refs, messages[name], child(followed.loc, 'messages', name), name))
+          for (const name of Object.keys(messages)) channel.messages.push(message(refs, messages[name], child(followed.loc, 'messages', name), name, family))
         }
       } else {
         for (const action of ['publish', 'subscribe'] as const) {
-          const op = own(value, action)
-          if (!isObject(op)) continue
+          const declaredOp = own(value, action)
+          if (!isObject(declaredOp)) continue
           const loc = child(followed.loc, action)
-          const messages = v2Messages(refs, own(op, 'message'), child(loc, 'message'))
+          const op = withTraits(refs, declaredOp, loc, family)
+          const messages = v2Messages(refs, own(op, 'message'), child(loc, 'message'), family)
           for (const m of messages) if (!channel.messages.some((x) => x.key === m.key)) channel.messages.push(m)
           const operation: AsyncOperation = {
             key: 'aop:' + toPointer(loc.path),
@@ -214,7 +242,7 @@ export function buildAsyncApi(root: Record<string, unknown>, family: Family, ref
         if (id.startsWith('x-')) continue
         const declared = { doc: '', path: ['operations', id] }
         const followed = refs.follow(operations[id], declared)
-        const op = isObject(followed.value) ? followed.value : {}
+        const op = isObject(followed.value) ? withTraits(refs, followed.value, followed.loc, family) : {}
         const channelRef = refOf(own(op, 'channel'))?.ref
         let channel: AsyncChannel | undefined
         if (channelRef) {
@@ -224,7 +252,7 @@ export function buildAsyncApi(root: Record<string, unknown>, family: Family, ref
         let messages: AsyncMessage[] = []
         const listed = own(op, 'messages')
         if (Array.isArray(listed)) {
-          messages = listed.map((m, index) => message(refs, m, child(followed.loc, 'messages', String(index)), String(index)))
+          messages = listed.map((m, index) => message(refs, m, child(followed.loc, 'messages', String(index)), String(index), family))
         } else if (channel) {
           messages = channel.messages
         }
@@ -276,14 +304,71 @@ export function buildAsyncApi(root: Record<string, unknown>, family: Family, ref
 }
 
 /** A 2.x operation's `message`: one message, a reference, or `oneOf` a list of them. */
-function v2Messages(refs: Refs, raw: unknown, at: Loc): AsyncMessage[] {
+function v2Messages(refs: Refs, raw: unknown, at: Loc, family: Family): AsyncMessage[] {
   if (raw === undefined) return []
   const followed = refs.follow(raw, at)
   const value = followed.value
   if (isObject(value) && Array.isArray(value.oneOf)) {
-    return value.oneOf.map((m, index) => message(refs, m, child(followed.loc, 'oneOf', String(index)), String(index)))
+    return value.oneOf.map((m, index) => message(refs, m, child(followed.loc, 'oneOf', String(index)), String(index), family))
   }
-  return [message(refs, raw, at, '')]
+  return [message(refs, raw, at, '', family)]
+}
+
+/** One entry of a server's or operation's `security`. */
+export type AsyncSecurityItem =
+  | { kind: 'ref'; name: string; ref: string }
+  | { kind: 'inline'; name: string; value: Record<string, unknown>; index: number }
+  | { kind: 'requirement'; name: string; scopes: string[] }
+
+/** 2.x lists requirements (`{ scheme: [scopes] }`); 3.x lists schemes, by reference or inline. */
+export function asyncSecurityItems(family: Family, security: unknown): AsyncSecurityItem[] {
+  if (!Array.isArray(security)) return []
+  const out: AsyncSecurityItem[] = []
+  security.forEach((item, index) => {
+    if (!isObject(item)) return
+    const ref = refOf(item)
+    if (ref) out.push({ kind: 'ref', name: ref.ref.split('/').pop() ?? ref.ref, ref: ref.ref })
+    else if (family === 'asyncapi3') out.push({ kind: 'inline', name: str(own(item, 'type')) ?? String(index + 1), value: item, index })
+    else for (const name of Object.keys(item)) out.push({ kind: 'requirement', name, scopes: Array.isArray(item[name]) ? (item[name] as unknown[]).map(String) : [] })
+  })
+  return out
+}
+
+export interface AsyncReply {
+  loc: Loc
+  /** The runtime expression of the reply address, if any. */
+  address?: string
+  channel?: AsyncChannel
+  channelRef?: string
+  /** The reply's messages; without any, its channel's. */
+  messages: AsyncMessage[]
+}
+
+/** An AsyncAPI 3 operation's reply, with references followed. */
+export function replyOf(refs: Refs, model: AsyncApiModel, op: AsyncOperation): AsyncReply | null {
+  const raw = own(op.op, 'reply')
+  if (!isObject(raw)) return null
+  const followed = refs.follow(raw, child(op.loc, 'reply'))
+  const reply = isObject(followed.value) ? followed.value : {}
+  const out: AsyncReply = { loc: followed.loc, messages: [] }
+  const address = own(reply, 'address')
+  if (isObject(address)) {
+    const a = refs.follow(address, child(followed.loc, 'address'))
+    if (isObject(a.value)) out.address = str(own(a.value, 'location'))
+  }
+  const channelRef = refOf(own(reply, 'channel'))?.ref
+  if (channelRef !== undefined) {
+    const resolved = refs.resolve(channelRef, followed.loc.doc, false, child(followed.loc, 'channel').path)
+    out.channel = resolved.kind === 'local' && resolved.loc.doc === '' ? model.channels.find((c) => toPointer(c.loc.path) === toPointer(resolved.loc.path)) : undefined
+    if (!out.channel) out.channelRef = channelRef
+  }
+  const listed = own(reply, 'messages')
+  if (Array.isArray(listed)) {
+    out.messages = listed.map((m, index) => message(refs, m, child(followed.loc, 'messages', String(index)), String(index), model.family))
+  } else if (out.channel) {
+    out.messages = out.channel.messages
+  }
+  return out
 }
 
 export function asyncServerList(model: AsyncApiModel, value: unknown): AsyncServer[] {

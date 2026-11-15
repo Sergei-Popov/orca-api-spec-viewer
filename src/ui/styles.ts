@@ -232,6 +232,7 @@ h3.h { font-size: 13px; margin: 18px 0 8px; font-weight: 600; color: var(--fg); 
 .ptable tr:first-child td { border-top: 0; }
 .ptable td.name { width: 32%; min-width: 140px; }
 .pname { font: 600 12.5px var(--mono-font); overflow-wrap: anywhere; }
+.scopes .pname { overflow-wrap: break-word; }
 .ptype { font: 12px var(--mono-font); color: var(--type); }
 .pflags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 3px; align-items: center; }
 .pdesc > .md > :first-child { margin-top: 0; } .pdesc > .md > :last-child { margin-bottom: 0; }
