@@ -8,7 +8,7 @@ import { operationServers, operationSecurity, requirementScheme, securitySchemes
 import { compareStatus, examplesOf, mediaList, operationDetails, paramView, type BodyView, type ExampleView, type HeaderView, type LinkView, type Located, type MediaView, type OperationDetails, type ParamView, type ResponseView } from '../spec/operation'
 import { getAt, isObject, own, str, toPointer } from '../spec/pointer'
 import type { Loc } from '../spec/refs'
-import { buildRequest, renderSample, sampleLanguages, type SampleLanguage } from '../spec/samples'
+import { buildRequest, renderSample, sampleLanguages, shellSafe, type SampleLanguage } from '../spec/samples'
 import {
   banner,
   chip,
@@ -603,6 +603,7 @@ function samplesBox(ctx: PageCtx, model: OpenApiModel, op: Operation, details: O
   )
   if (request.placeholders) box.append(h('div', { className: 'note' }, svg(icons.info), h('span', null, format(ctx.t.samplesFillIn, { names: request.placeholders.join(', ') }))))
   if (request.replaced) box.append(h('div', { className: 'note' }, svg(icons.info), h('span', null, ctx.t.samplesReplaced)))
+  if (!shellSafe(request)) box.append(h('div', { className: 'note' }, svg(icons.info), h('span', null, ctx.t.samplesNoShell)))
   draw(initial)
   return box
 }

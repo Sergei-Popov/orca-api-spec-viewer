@@ -342,10 +342,36 @@ export function shellQuote(text: string): string {
   return `'${text.replace(/'/g, `'\\''`)}'`
 }
 
-/** The languages a request can be written in: HTTPie takes only methods made of letters. */
+/** NUL ends a shell argument, and CR can run a pasted line early. */
+const UNSAFE_DATA = /[\0\r]/
+/** Names, headers and URLs take no line break either: in a header it would start another one. */
+const UNSAFE_LINE = /[\0\r\n]/
+
+/**
+ * Whether a shell command (curl, HTTPie) can carry the request exactly and safely. Query pairs and
+ * JSON bodies always can: curl writes them encoded, and HTTPie falls back to the URL or --raw.
+ */
+export function shellSafe(request: SampleRequest): boolean {
+  if (UNSAFE_LINE.test(request.url)) return false
+  if (request.headers.some(([name, value]) => UNSAFE_LINE.test(name) || UNSAFE_LINE.test(value))) return false
+  const body = request.body
+  if (body?.form?.some((field) => UNSAFE_LINE.test(field.name) || UNSAFE_DATA.test(field.value))) return false
+  if (body?.text !== undefined && UNSAFE_DATA.test(body.text)) return false
+  return true
+}
+
+/**
+ * The languages a request can be written in: shell commands only when shellSafe, and HTTPie only
+ * for methods made of letters and URLs it cannot read as an option.
+ */
 export function sampleLanguages(request: SampleRequest): SampleLanguage[] {
   if (!request.methodValid) return []
-  return SAMPLE_LANGUAGES.filter((language) => language !== 'httpie' || /^[A-Za-z]+$/.test(request.method))
+  const shell = shellSafe(request)
+  return SAMPLE_LANGUAGES.filter((language) => {
+    if (language === 'curl') return shell
+    if (language === 'httpie') return shell && /^[A-Za-z]+$/.test(request.method) && !request.url.startsWith('-')
+    return true
+  })
 }
 
 export function renderSample(language: SampleLanguage, request: SampleRequest): string {
@@ -375,7 +401,8 @@ function renderCurl(request: SampleRequest): string {
   // curl reads {a,b} and [1-3] in a URL as patterns that make several requests; -g sends it as is.
   const curl = /[{}[\]]/.test(url) ? 'curl -g' : 'curl'
   const first = request.method === 'GET' ? curl : `${curl} -X ${shellQuote(request.method)}`
-  lines.push(`${first} ${shellQuote(url)}`)
+  // A URL that does not start with its scheme could be read as an option; --url never is.
+  lines.push(`${first} ${/^[a-z][a-z0-9+.-]*:/i.test(url) ? '' : '--url '}${shellQuote(url)}`)
   if (request.basicAuth) lines.push(`-u ${shellQuote('<USERNAME>:<PASSWORD>')}`)
   // `Name;` sends an empty header; `Name: ` with nothing after it would remove the header.
   for (const [name, value] of request.headers) lines.push(`-H ${shellQuote(value === '' ? `${name};` : `${name}: ${value}`)}`)
@@ -388,8 +415,10 @@ function renderCurl(request: SampleRequest): string {
       else if (!field.name.includes('=')) lines.push(`-F ${shellQuote(`${field.name}=@${field.value}`)}`)
     }
   } else if (body?.form) {
-    // `name=value` is never read from a file: curl splits at the first `=` and encodes the rest.
-    for (const field of body.form) lines.push(`--data-urlencode ${shellQuote(`${field.name}=${field.value}`)}`)
+    // `name=value` is never read from a file: curl splits at the first `=` (only an argument
+    // without one can be `name@file`) and encodes the rest. It sends the name as it is, so the
+    // name is encoded here: `a&b` or `a=b` would otherwise arrive as other fields.
+    for (const field of body.form) lines.push(`--data-urlencode ${shellQuote(`${encodeComponent(field.name)}=${field.value}`)}`)
   } else if (body?.text !== undefined) lines.push(`--data-raw ${shellQuote(body.text)}`)
   return lines.join(' \\\n  ')
 }
@@ -399,7 +428,8 @@ function renderCurl(request: SampleRequest): string {
 const JS_ESCAPES: Record<string, string> = { '\\': '\\\\', "'": "\\'", '\n': '\\n', '\r': '\\r', '\u2028': '\\u2028', '\u2029': '\\u2029' }
 
 function jsString(text: string): string {
-  return `'${text.replace(/[\\'\n\r\u2028\u2029]/g, (c) => JS_ESCAPES[c])}'`
+  // Other control characters (NUL among them) as \xNN, so the source shows them.
+  return `'${text.replace(/[\\'\u2028\u2029\x00-\x1f\x7f]/g, (c) => JS_ESCAPES[c] ?? '\\x' + c.charCodeAt(0).toString(16).padStart(2, '0'))}'`
 }
 
 function jsKey(key: string): string {
@@ -528,7 +558,7 @@ function httpieKey(key: string): string | null {
 }
 
 function httpieValue(value: string): string | null {
-  if (/\\[:;=@]/.test(value)) return null
+  if (/\\[:;=@]/.test(value) || UNSAFE_DATA.test(value)) return null
   return httpieLooseValue(value)
 }
 

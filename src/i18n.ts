@@ -218,6 +218,7 @@ const en = {
   samplesBadMethod: 'No code samples: “{method}” is not a valid HTTP method name.',
   placeholderHost: 'The document names no server, so the samples use api.example.com.',
   samplesFillIn: 'Replace {names} with real values before you run a sample.',
+  samplesNoShell: 'A name, header or value here holds a NUL, carriage return or line break, which a shell command cannot carry safely, so there are no curl or HTTPie samples.',
   samplesReplaced: 'A value here has a broken character (half of a UTF-16 pair); the samples show the replacement character U+FFFD in its place.',
   tryItNote: 'There is no “Try it out”: the view has no network.',
 
@@ -595,6 +596,7 @@ const ru: Strings = {
   samplesBadMethod: 'Примеров кода нет: «{method}» — недопустимое имя метода HTTP.',
   placeholderHost: 'В документе не указан сервер, поэтому в примерах — api.example.com.',
   samplesFillIn: 'Перед запуском замените {names} настоящими значениями.',
+  samplesNoShell: 'В имени, заголовке или значении есть символ NUL, возврат каретки или перевод строки: команда оболочки не может безопасно их передать, поэтому примеров curl и HTTPie нет.',
   samplesReplaced: 'В значении есть испорченный символ (половина пары UTF-16); в примерах вместо него стоит символ замены U+FFFD.',
   tryItNote: 'Кнопки «Попробовать» нет: у представления нет сети.',
 

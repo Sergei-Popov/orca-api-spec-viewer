@@ -2,7 +2,7 @@ import { assert, test } from 'orca/testing'
 import { analyze } from '../analyze'
 import type { OpenApiModel } from './openapi'
 import { operationDetails } from './operation'
-import { buildRequest, renderSample, sampleLanguages, wellFormed, type SampleRequest } from './samples'
+import { buildRequest, renderSample, sampleLanguages, shellSafe, wellFormed, type SampleRequest } from './samples'
 
 function requests(text: string): { route: string; method: string; request: SampleRequest }[] {
   const a = analyze(text)
@@ -169,9 +169,10 @@ function curlSends(sample: string): Sent {
         sent.text = arg
         break
       case '--data-urlencode':
-        // curl splits at the first `=`; only without one would `name@file` read a file.
+        // curl splits at the first `=`; only without one would `name@file` read a file. The name
+        // goes out as written, so the server decodes it.
         assert.ok(eq >= 0, `--data-urlencode ${arg} reads a file`)
-        sent.fields.push([arg.slice(0, eq), arg.slice(eq + 1)])
+        sent.fields.push([decodeURIComponent(arg.slice(0, eq)), arg.slice(eq + 1)])
         break
       case '--form-string':
         assert.ok(eq > 0, arg)
@@ -332,7 +333,7 @@ test('curl samples use the options that never read files', () => {
   assert.match(upload, /-F photo=@file\.bin/)
   const form = renderSample('curl', one(FILE_LIKE, '/form'))
   assert.match(form, /--data-urlencode a=@notes\.txt/)
-  assert.match(form, /--data-urlencode @b=x/, 'curl splits at the first "=", so the name is literal too')
+  assert.match(form, /--data-urlencode %40b=x/, 'curl sends the name as written, so it is encoded')
   const json = renderSample('curl', one(FILE_LIKE, '/notes'))
   assert.match(json, /-d '\{\n {2}"note": "@notes\.txt"/)
   const search = renderSample('curl', one(FILE_LIKE, '/search'))
@@ -621,4 +622,89 @@ paths:
   assert.match(python, /data=\{"kind": \["a", "b"\], "note": "hi"\}/)
   // An object literal would keep one of the repeated fields; fetch gets the list of pairs.
   assert.match(renderSample('fetch', request), /body: new URLSearchParams\(\[\n {4}\['kind', 'a'\],\n {4}\['kind', 'b'\],\n {4}\['note', 'hi'\],\n {2}\]\),/)
+})
+
+test('shell samples: no NUL, CR or stray line break, and every URL starts with its scheme', () => {
+  // Coordinator check (same class as a HAR Viewer blocker). A NUL ends a shell argument, a CR can
+  // run a pasted line early, and a line break in a header value would start another header.
+  const spec = `openapi: 3.0.3
+info: { title: Shell, version: '1' }
+servers:
+  - url: '{base}'
+    variables: { base: { default: '-o/tmp/x' } }
+paths:
+  /header:
+    get:
+      parameters:
+        - { name: X-Note, in: header, required: true, schema: { type: string }, example: "one\\ntwo" }
+      responses: { '200': { description: ok } }
+  /text:
+    post:
+      requestBody: { content: { text/plain: { example: "before\\u0000after" } } }
+      responses: { '200': { description: ok } }
+  /form:
+    post:
+      requestBody: { content: { application/x-www-form-urlencoded: { example: { note: "a\\rb" } } } }
+      responses: { '200': { description: ok } }
+  /lines:
+    post:
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string }, example: "a\\u0000b" }
+      requestBody: { content: { application/json: { example: { note: "x\\u0000y", text: "one\\ntwo" } } } }
+      responses: { '200': { description: ok } }
+  /cookie:
+    get:
+      parameters:
+        - { name: sid, in: cookie, required: true, schema: { type: string }, example: notes.txt }
+        - { name: '@notes.txt', in: header, required: true, schema: { type: string }, example: v }
+      responses: { '200': { description: ok } }
+`
+  const all = requests(spec)
+  const get = (route: string) => all.find((r) => r.route === route)!.request
+  for (const route of ['/header', '/text', '/form']) {
+    assert.deepEqual(sampleLanguages(get(route)), ['fetch', 'python'], route)
+    assert.equal(shellSafe(get(route)), false, route)
+  }
+  // Encoded query values and JSON escapes carry anything: HTTPie moves such values to the URL or --raw.
+  assert.deepEqual(sampleLanguages(get('/lines')), ['curl', 'fetch', 'python', 'httpie'])
+  const httpie = renderSample('httpie', get('/lines'))
+  assert.ok(!/[\0\r]/.test(httpie), httpie)
+  assert.match(httpie, /q=a%00b/)
+  assert.match(httpie, /--raw=/)
+  assertSends('curl', get('/lines'))
+  assertSends('httpie', get('/lines'))
+  // fetch shows control characters as escapes.
+  assert.match(renderSample('fetch', get('/text')), /body: 'before\\x00after'/)
+  for (const { request } of all) {
+    // A server URL without a scheme gets the stand-in host, so the URL is never an option.
+    assert.match(request.url, /^https:\/\/api\.example\.com\//)
+    for (const language of sampleLanguages(request)) assert.ok(!/[\0\r]/.test(renderSample(language, request)), `${language} ${request.url}`)
+  }
+  // Cookies go in a Cookie header: curl reads a -b value without `=` as a file.
+  const cookie = renderSample('curl', get('/cookie'))
+  assert.match(cookie, /-H 'Cookie: sid=notes\.txt'/)
+  assert.ok(!/ -b |--cookie/.test(cookie), cookie)
+  assert.ok(!cookie.includes("-H '@"), cookie)
+  // A URL that does not start with its scheme would go behind --url.
+  const bare = renderSample('curl', { ...get('/cookie'), url: '-o/tmp/x', headers: [] })
+  assert.match(bare, /^curl --url -o\/tmp\/x$/)
+  assert.ok(!sampleLanguages({ ...get('/cookie'), url: '-o/tmp/x' }).includes('httpie'))
+})
+
+test('form field names are encoded for curl, so & and = stay in the name', () => {
+  const request = one(`openapi: 3.0.3
+info: { title: T, version: '1' }
+servers: [{ url: 'http://127.0.0.1:9' }]
+paths:
+  /form:
+    post:
+      requestBody: { content: { application/x-www-form-urlencoded: { example: { 'a&b': one, 'c=d': two, 'notes@x': three } } } }
+      responses: { '200': { description: ok } }
+`, '/form')
+  const curl = renderSample('curl', request)
+  assert.match(curl, /--data-urlencode a%26b=one/)
+  assert.match(curl, /--data-urlencode c%3Dd=two/)
+  assert.match(curl, /--data-urlencode notes%40x=three/)
+  assertSends('curl', request)
+  assertSends('httpie', request)
 })
