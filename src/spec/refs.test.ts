@@ -145,6 +145,37 @@ test('$id and $anchor are scoped by resource URI', () => {
   assert.ok(!a.problems.some((p) => p.rule === 'unresolved-ref' || p.rule === 'external-ref'), JSON.stringify(a.problems))
 })
 
+test('a resource without the anchor or $id never borrows another resource’s', () => {
+  // Before: D's `#node` and `https://d.example/schema#node` showed A's node, and Three's `item`
+  // showed One's item, with no problem: the by-name and by-text last resorts looked everywhere.
+  const schemas = {
+    A: { $id: 'https://a.example/schema', $defs: { N: { $anchor: 'node', type: 'string' } } },
+    D: { $id: 'https://d.example/schema', type: 'object', properties: { n: { $ref: '#node' }, byUri: { $ref: 'https://d.example/schema#node' } } },
+    One: { $id: 'https://one.example/root', $defs: { I: { $id: 'item', type: 'string' } } },
+    Three: { $id: 'https://three.example/root', type: 'object', properties: { item: { $ref: 'item' } } },
+    // In the root resource of a document without $self, the last resorts still help.
+    Root: { type: 'object', properties: { n: { $ref: '#node' }, item: { $ref: 'item' } } }
+  }
+  const a = analyze(spec31(schemas, '#/components/schemas/Root'))
+  const stop = (schema: string, prop: string) => {
+    const at = ['components', 'schemas', schema, 'properties', prop]
+    const followed = a.refs.follow(getAt(a.refs.root(), at), { doc: '', path: at })
+    return followed.stop ? followed.stop.kind : followed.loc.path.join('/')
+  }
+  assert.equal(stop('D', 'n'), 'missing')
+  assert.equal(stop('D', 'byUri'), 'missing')
+  assert.equal(stop('Three', 'item'), 'external')
+  assert.equal(stop('Root', 'n'), 'components/schemas/A/$defs/N')
+  assert.equal(stop('Root', 'item'), 'components/schemas/One/$defs/I')
+  const reported = a.problems.map((p) => `${p.rule} ${p.path.slice(2, 5).join('/')}`)
+  assert.ok(reported.includes('unresolved-ref D/properties/n'), reported.join('\n'))
+  assert.ok(reported.includes('unresolved-ref D/properties/byUri'), reported.join('\n'))
+  assert.ok(a.problems.some((p) => p.rule === 'external-ref' && p.params.file === 'https://three.example/item'), JSON.stringify(a.problems))
+  // With $self the document has a base of its own: no last resort there either.
+  const selfDoc = new Refs({ $self: 'https://api.example/openapi', components: { schemas: { A: schemas.A, R: { $ref: '#node' } } } })
+  assert.equal(selfDoc.resolve('#node', '', false, ['components', 'schemas', 'R']).kind, 'missing')
+})
+
 test('$dynamicRef takes the outermost resource of the dynamic scope', () => {
   // The generic array from the OpenAPI 3.1.1 and 3.2 Schema Object examples. Before: both arrays
   // had items of the "allow all" default, and the example was [].

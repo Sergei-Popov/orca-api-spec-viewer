@@ -72,6 +72,8 @@ export function fileBaseName(file: string): string {
 interface DocIndex {
   /** The document's URI: OpenAPI 3.2's `$self`, or PLACEHOLDER_BASE. */
   base: string
+  /** The document sets its URI with `$self`. */
+  self: boolean
   /** Schema resources by absolute URI. */
   ids: Map<string, string[]>
   /** `$id`s as written, for a reference that matches one only by its text. */
@@ -162,9 +164,16 @@ export class Refs {
     let uri = resource.base
     // A pointer inside a resource is tried there first, then from the root.
     let fallback = resource.path.length > 0
+    // Matching an `$id` by its text, or an anchor by its name alone, is a last resort for a
+    // reference in the document's own resource when no `$id` or `$self` gives it a base: inside a
+    // resource it would pick another resource's schema.
+    const loose = resource.path.length === 0 && !index.self
+    let external = file
     if (file !== '') {
       fallback = false
       const absolute = resolveUri(file, resource.base)
+      // Named by the URI it resolves to where a real base makes that the clearer name.
+      if (absolute !== null && !loose && !absolute.startsWith(PLACEHOLDER_BASE)) external = absolute
       const byId = absolute !== null ? index.ids.get(absolute) : undefined
       if (byId) {
         base = byId
@@ -172,7 +181,7 @@ export class Refs {
       } else if (absolute !== null && sameDocument(absolute, index.base)) {
         base = []
         uri = index.base
-      } else if (index.rawIds.has(file.replace(/#$/, ''))) {
+      } else if (loose && index.rawIds.has(file.replace(/#$/, ''))) {
         base = index.rawIds.get(file.replace(/#$/, ''))!
         uri = this.resourceOf(from, base).base
       } else {
@@ -182,7 +191,7 @@ export class Refs {
         if (doc !== null) uri = this.index(doc).base
       }
     }
-    if (doc === null) return { kind: 'external', ref, file, fragment }
+    if (doc === null) return { kind: 'external', ref, file: external, fragment }
     if (fragment === '' || fragment === '#') {
       return { kind: 'local', loc: { doc, path: base }, value: getAt(this.docs.get(doc), base) }
     }
@@ -198,14 +207,14 @@ export class Refs {
       return { kind: 'missing', ref, reason: 'not-found' }
     }
     // A plain name: an anchor of the target resource (a $dynamicAnchor is one too), or, as a last
-    // resort, the first anchor of that name anywhere.
+    // resort for the root resource of a document without `$self`, the first anchor of that name.
     const name = decodeFragment(fragment.slice(1))
     const target = this.index(doc)
+    const byName = uri === target.base && !target.self && (file !== '' || loose)
     const found =
       target.anchors.get(`${uri}#${name}`) ??
       target.dynamicAnchors.get(`${uri}#${name}`) ??
-      target.anchorNames.get(name) ??
-      target.dynamicAnchorNames.get(name)
+      (byName ? (target.anchorNames.get(name) ?? target.dynamicAnchorNames.get(name)) : undefined)
     if (!found) return { kind: 'missing', ref, reason: 'anchor-not-found' }
     const loc = { doc, path: found }
     return { kind: 'local', loc, value: this.get(loc) }
@@ -288,7 +297,7 @@ export class Refs {
     const self = isObject(root) && typeof root.$self === 'string' ? root.$self : undefined
     const fallback = doc === '' ? PLACEHOLDER_BASE : new URL(encodeURIComponent(doc), PLACEHOLDER_BASE).href
     const base = (self !== undefined ? resolveUri(self, fallback) : null) ?? fallback
-    index = { base, ids: new Map(), rawIds: new Map(), anchors: new Map(), anchorNames: new Map(), dynamicAnchors: new Map(), dynamicAnchorNames: new Map(), resources: new Map() }
+    index = { base, self: base !== fallback, ids: new Map(), rawIds: new Map(), anchors: new Map(), anchorNames: new Map(), dynamicAnchors: new Map(), dynamicAnchorNames: new Map(), resources: new Map() }
     index.resources.set('', { path: [], base })
     this.indexes.set(doc, index)
     buildIndex(root, index)
