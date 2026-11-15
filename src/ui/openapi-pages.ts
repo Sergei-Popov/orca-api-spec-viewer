@@ -13,6 +13,7 @@ import {
   banner,
   chip,
   codeBlock,
+  cutNote,
   copyButton,
   describe,
   externalDocsEl,
@@ -28,6 +29,7 @@ import {
   statusBadge,
   stopNote,
   tabs,
+  valueText,
   valueToText,
   type PageCtx
 } from './context'
@@ -460,10 +462,19 @@ function linksTable(ctx: PageCtx, links: LinkView[]): HTMLElement {
 }
 
 /** The examples to show for a media type: the given ones, else one generated from its schema. */
-export function mediaExamples(ctx: PageCtx, media: MediaView, mode: 'request' | 'response'): { label: string; text: string; generated: boolean; external?: string }[] {
-  const out: { label: string; text: string; generated: boolean; external?: string }[] = []
+export interface MediaExample {
+  label: string
+  text: string
+  generated: boolean
+  /** The text was cut short: it is shown plain, with a note. */
+  cut?: boolean
+  external?: string
+}
+
+export function mediaExamples(ctx: PageCtx, media: MediaView, mode: 'request' | 'response'): MediaExample[] {
+  const out: MediaExample[] = []
   for (const ex of media.examples.slice(0, 20)) {
-    if (ex.hasValue) out.push({ label: ex.summary ?? ex.name, text: valueToText(ex.value), generated: false })
+    if (ex.hasValue) out.push({ label: ex.summary ?? ex.name, ...valueText(ex.value), generated: false })
     else if (ex.serializedValue !== undefined) out.push({ label: ex.summary ?? ex.name, text: ex.serializedValue, generated: false })
     else if (ex.externalValue) out.push({ label: ex.summary ?? ex.name, text: '', generated: false, external: ex.externalValue })
   }
@@ -471,7 +482,7 @@ export function mediaExamples(ctx: PageCtx, media: MediaView, mode: 'request' | 
     const schema = media.itemSchema ?? media.schema
     if (schema && !schema.stop) {
       const value = exampleFromSchema(ctx.refs, schema.value, schema.loc, { mode })
-      if (value !== undefined) out.push({ label: ctx.t.generatedExample, text: valueToText(value), generated: true })
+      if (value !== undefined) out.push({ label: ctx.t.generatedExample, ...valueText(value), generated: true })
     }
   }
   return out
@@ -501,7 +512,8 @@ function exampleBox(ctx: PageCtx, id: string, title: Child, choices: { value: st
         return
       }
       if (ex.external) body.append(h('div', { className: 'boxbody' }, format(ctx.t.externalExample, { url: '' }), externalLink(ctx, ex.external)))
-      else body.append(codeBlock(ex.text, /json|\*\/\*|^$/i.test(choice.media.type) || ex.generated ? 'json' : 'text'))
+      else body.append(codeBlock(ex.text, /json|\*\/\*|^$/i.test(choice.media.type) || ex.generated ? 'json' : 'text', ex.cut))
+      if (ex.cut) body.append(cutNote(ctx))
       if (ex.generated) body.append(h('div', { className: 'note' }, svg(icons.info), ctx.t.generatedExample))
     }
     if (list.length > 1) {

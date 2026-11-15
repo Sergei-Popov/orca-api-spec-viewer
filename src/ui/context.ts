@@ -5,6 +5,7 @@ import type { Analysis } from '../analyze'
 import { format, type Strings } from '../i18n'
 import { renderMarkdown, type MarkdownHost } from '../markdown/render'
 import { prettyJson } from '../spec/example'
+import { codeTokens, HIGHLIGHT_LIMIT, type CodeLanguage } from './tokens'
 import { isObject, own, str, toPointer } from '../spec/pointer'
 import { MAX_HOPS, splitRef, type Loc, type Refs, type Resolution } from '../spec/refs'
 import { refName } from '../spec/schema'
@@ -125,11 +126,7 @@ export function pageLink(ctx: PageCtx, key: string, label: Child, className = 'l
 
 // Code ----------------------------------------------------------------------------------------
 
-export type CodeLanguage = 'json' | 'shell' | 'js' | 'python' | 'text'
-
-const JSON_TOKENS = /("(?:\\.|[^"\\\n])*")(\s*:)?|\b(true|false|null)\b|(-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)/g
-const SHELL_TOKENS = /('(?:[^'])*')|("(?:\\.|[^"\\])*")|(^|\s)(--?[A-Za-z][\w-]*)|(#[^\n]*)/g
-const JS_TOKENS = /('(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\.|[^`\\])*`)|\b(const|let|await|import|from|async|function|return|new|true|false|null|True|False|None)\b|(-?\b\d+(?:\.\d+)?\b)|((?:\/\/|#)[^\n]*)/g
+export type { CodeLanguage }
 
 function span(className: string, text: string): HTMLElement {
   const el = document.createElement('span')
@@ -138,57 +135,42 @@ function span(className: string, text: string): HTMLElement {
   return el
 }
 
-/** Colours strings, keys, numbers, flags and keywords; everything else stays plain text. */
-export function highlightCode(text: string, language: CodeLanguage): DocumentFragment {
+/**
+ * Colours strings, keys, numbers, flags and keywords; everything else stays plain text. Text that
+ * was cut short (`plain`) or is very long is shown as it is.
+ */
+export function highlightCode(text: string, language: CodeLanguage, plain = false): DocumentFragment {
   const fragment = document.createDocumentFragment()
-  if (language === 'text' || text.length > 400_000) {
-    fragment.append(text)
-    return fragment
-  }
-  const pattern = language === 'json' ? JSON_TOKENS : language === 'shell' ? SHELL_TOKENS : JS_TOKENS
-  pattern.lastIndex = 0
-  let at = 0
-  for (let m = pattern.exec(text); m; m = pattern.exec(text)) {
-    if (m.index > at) fragment.append(text.slice(at, m.index))
-    if (language === 'json') {
-      if (m[1]) {
-        fragment.append(span(m[2] ? 'k' : 's', m[1]))
-        if (m[2]) fragment.append(m[2])
-      } else if (m[3]) fragment.append(span('l', m[3]))
-      else fragment.append(span('n', m[4]))
-    } else if (language === 'shell') {
-      if (m[1] || m[2]) fragment.append(span('s', m[1] ?? m[2]))
-      else if (m[4]) {
-        fragment.append(m[3], span('f', m[4]))
-      } else fragment.append(span('c', m[5]))
-    } else {
-      if (m[1]) fragment.append(span('s', m[1]))
-      else if (m[2]) fragment.append(span('l', m[2]))
-      else if (m[3]) fragment.append(span('n', m[3]))
-      else fragment.append(span('c', m[4]))
-    }
-    at = m.index + m[0].length
-  }
-  if (at < text.length) fragment.append(text.slice(at))
+  for (const token of codeTokens(text, plain ? 'text' : language)) fragment.append(token.kind ? span(token.kind, token.text) : token.text)
   return fragment
 }
 
-export function codeBlock(text: string, language: CodeLanguage): HTMLElement {
+export function codeBlock(text: string, language: CodeLanguage, plain = false): HTMLElement {
   const pre = h('pre', { className: 'code' })
-  pre.append(highlightCode(text, language))
+  pre.append(highlightCode(text, language, plain))
   return pre
+}
+
+/** The note under a value that was cut short. */
+export function cutNote(ctx: PageCtx): HTMLElement {
+  return h('div', { className: 'note' }, svg(icons.info), ctx.t.exampleCut)
 }
 
 /** A value as pretty JSON with highlighting, cut off with a note past a size. */
 export function jsonBlock(ctx: PageCtx, value: unknown): HTMLElement {
   const { text, cut } = prettyJson(value)
-  const wrap = h('div', null, codeBlock(text, 'json'))
-  if (cut) wrap.append(h('div', { className: 'note' }, svg(icons.info), ctx.t.exampleCut))
+  const wrap = h('div', null, codeBlock(text, 'json', cut))
+  if (cut) wrap.append(cutNote(ctx))
   return wrap
 }
 
+/** A value as pretty JSON text, and whether it was cut short. */
+export function valueText(value: unknown): { text: string; cut: boolean } {
+  return prettyJson(value, HIGHLIGHT_LIMIT)
+}
+
 export function valueToText(value: unknown): string {
-  return prettyJson(value, 400_000).text
+  return valueText(value).text
 }
 
 // References ----------------------------------------------------------------------------------
