@@ -5,7 +5,7 @@
 import { isObject, own } from '../spec/pointer'
 import { schemaTypes } from '../spec/schema'
 import type { WalkContext } from './walker'
-import { jsonText, sameJson } from '../spec/json-text'
+import { duplicateIndexes, jsonText, sameJson } from '../spec/json-text'
 
 const TYPES_OLD = ['string', 'number', 'integer', 'boolean', 'array', 'object']
 const TYPES_NEW = [...TYPES_OLD, 'null']
@@ -247,9 +247,11 @@ function checkValues(schema: Record<string, unknown>, path: string[], ctx: WalkC
       ctx.problems.warn('empty-list', [...path, 'enum'], { min: 1 })
     } else {
       allowed = enumValues
+      // Repeats are found in one pass, so an enum of tens of thousands of values stays fast.
+      const repeats = new Set(duplicateIndexes(enumValues))
       enumValues.forEach((value, index) => {
         if (!fitsTypes(value, types)) ctx.problems.error('invalid-enum', [...path, 'enum', String(index)], { value: show(value), type: types.join(' | ') })
-        else if (enumValues.findIndex((other) => sameValue(other, value)) !== index) ctx.problems.warn('invalid-enum', [...path, 'enum', String(index)], { value: show(value), type: 'unique' })
+        else if (repeats.has(index)) ctx.problems.warn('invalid-enum', [...path, 'enum', String(index)], { value: show(value), type: 'unique' })
       })
     }
   }

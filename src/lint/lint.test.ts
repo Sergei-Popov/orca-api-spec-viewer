@@ -296,3 +296,17 @@ components:
   for (const key of Object.keys(en) as (keyof typeof en)[]) assert.equal(typeof ru[key], typeof en[key], key)
   for (const rule of Object.keys(en.messagesByRule)) assert.ok(rule in ru.messagesByRule, rule)
 })
+
+test('an enum of 50,000 values is checked for repeats in one pass', () => {
+  const values = Array.from({ length: 50_000 }, (_, i) => `value_${i}`)
+  const spec = (enumValues: unknown[]) =>
+    JSON.stringify({ openapi: '3.1.0', info: { title: 'T', version: '1' }, components: { schemas: { Big: { type: 'string', enum: enumValues } } } })
+  analyze(spec(values.slice(0, 100)))
+  const started = performance.now()
+  const a = analyze(spec([...values, 'value_49999']))
+  const ms = performance.now() - started
+  // Before: about 10 s, quadratic in the values.
+  assert.ok(ms < 1500, `${ms.toFixed(0)} ms`)
+  const repeats = a.problems.filter((p) => p.rule === 'invalid-enum')
+  assert.deepEqual(repeats.map((p) => [p.path.at(-1), p.params.type]), [['50000', 'unique']])
+})

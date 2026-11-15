@@ -1,6 +1,6 @@
 import { assert, test } from 'orca/testing'
 import { prettyJson } from './example'
-import { jsonText, sameJson } from './json-text'
+import { duplicateIndexes, jsonText, sameJson } from './json-text'
 import { formatValue } from './schema'
 
 test('bounded JSON text matches JSON.stringify until it is cut', () => {
@@ -40,4 +40,16 @@ test('JSON equality is structural and gives up past its budget', () => {
   const start = performance.now()
   assert.equal(sameJson(level, copy), false)
   assert.ok(performance.now() - start < 500)
+})
+
+test('duplicates are found in one pass, with the equality of sameJson', () => {
+  assert.deepEqual(duplicateIndexes(['a', 'b', 'a', 1, '1', 1, null, null, true, 'true']), [2, 5, 7])
+  assert.deepEqual(duplicateIndexes([{ a: 1, b: [1, 2] }, { b: [1, 2], a: 1 }, { a: 1, b: [2, 1] }]), [1], 'key order does not matter, item order does')
+  assert.deepEqual(duplicateIndexes([0, -0, Number.NaN, Number.NaN]), [1, 3])
+  const long = 'x'.repeat(5000)
+  assert.deepEqual(duplicateIndexes([long + 'a', long + 'b', long + 'a']), [2], 'long values share a key and are told apart by sameJson')
+  const same = Array.from({ length: 20_000 }, (_, i) => ({ code: `c${i}`, label: 'same' }))
+  const started = performance.now()
+  assert.deepEqual(duplicateIndexes([...same, { label: 'same', code: 'c7' }]), [20_000])
+  assert.ok(performance.now() - started < 1000, `${(performance.now() - started).toFixed(0)} ms for 20,000 objects`)
 })
