@@ -121,3 +121,118 @@ test('a long malformed input stays fast', () => {
   p('['.repeat(20000) + '*'.repeat(20000) + '`'.repeat(5000) + '<'.repeat(5000))
   assert.ok(Date.now() - start < 2000)
 })
+
+/** Inline nodes as HTML, to compare with the CommonMark spec's examples. */
+function html(nodes: ReturnType<typeof inl>): string {
+  return nodes
+    .map((n) => {
+      if (n.t === 'text') return n.v
+      if (n.t === 'code') return `<code>${n.v}</code>`
+      if (n.t === 'br') return '<br>'
+      if (n.t === 'image') return `<img alt="${n.alt}">`
+      if (n.t === 'link') return `<a>${html(n.c)}</a>`
+      return `<${n.t}>${html(n.c)}</${n.t}>`
+    })
+    .join('')
+}
+
+test('emphasis follows CommonMark, including the rule of three', () => {
+  const cases: [string, string][] = [
+    ['*foo bar*', '<em>foo bar</em>'],
+    ['*foo**bar**baz*', '<em>foo<strong>bar</strong>baz</em>'],
+    ['*foo**bar*', '<em>foo**bar</em>'],
+    ['**foo*bar*baz**', '<strong>foo<em>bar</em>baz</strong>'],
+    ['*(*foo*)*', '<em>(<em>foo</em>)</em>'],
+    ['_foo_bar_', '<em>foo_bar</em>'],
+    ['foo*bar*', 'foo<em>bar</em>'],
+    ['*foo _bar* baz_', '<em>foo _bar</em> baz_'],
+    ['**foo "*bar*" foo**', '<strong>foo "<em>bar</em>" foo</strong>'],
+    ['****foo****', '<strong><strong>foo</strong></strong>'],
+    ['*foo**', '<em>foo</em>*'],
+    ['**foo*', '*<em>foo</em>'],
+    ['*a **b** c*', '<em>a <strong>b</strong> c</em>'],
+    ['foo***bar***baz', 'foo<em><strong>bar</strong></em>baz'],
+    ['*foo [*bar*](#x)*', '<em>foo <a><em>bar</em></a></em>'],
+    ['~~a *b* c~~', '<del>a <em>b</em> c</del>'],
+    ['**a *b** c*', '<em><em>a <em>b</em></em> c</em>']
+  ]
+  for (const [source, expected] of cases) assert.equal(html(inl(source)), expected, source)
+})
+
+test('ATX headings, table delimiters and HTML blocks without patterns that backtrack', () => {
+  assert.deepEqual(p('#   Title   ###   '), [{ t: 'h', level: 1, c: [{ t: 'text', v: 'Title' }] }])
+  assert.deepEqual(p('## foo#'), [{ t: 'h', level: 2, c: [{ t: 'text', v: 'foo#' }] }])
+  assert.deepEqual(p('### ###'), [{ t: 'h', level: 3, c: [] }])
+  assert.deepEqual(p('#5 bolt'), [{ t: 'p', c: [{ t: 'text', v: '#5 bolt' }] }])
+  assert.deepEqual(p('#'), [{ t: 'h', level: 1, c: [] }])
+  assert.equal(p('a | b\n:-- | --:\n1 | 2')[0].t, 'table')
+  assert.equal(p('a | b\n- | x')[0].t, 'p')
+  assert.equal(p('|' + 'a|'.repeat(70) + '\n|' + '-|'.repeat(70))[0].t, 'p', 'more than 64 columns is not a table')
+  assert.deepEqual(p('<div>\nkeep <script>drop()</script> this <!-- not this --> <p class="x">and</p>\n</div>'), [
+    { t: 'p', c: [{ t: 'text', v: 'keep  this' }, { t: 'br' }, { t: 'text', v: 'and' }] }
+  ])
+  assert.deepEqual(inl('a <span title="x > y">b</span> <!-- c --> d'), [{ t: 'text', v: 'a b  d' }])
+  assert.deepEqual(inl('see https://example.com/a_(b)). and www.example.com/x&amp;'), [
+    { t: 'text', v: 'see ' },
+    { t: 'link', href: 'https://example.com/a_(b)', c: [{ t: 'text', v: 'https://example.com/a_(b)' }] },
+    { t: 'text', v: '). and ' },
+    { t: 'link', href: 'https://www.example.com/x', c: [{ t: 'text', v: 'www.example.com/x' }] },
+    { t: 'text', v: '&' }
+  ])
+})
+
+test('100 KB of adversarial Markdown parses in under 200 ms each, and renders without overflow', () => {
+  const N = 100_000
+  const cases: Record<string, string> = {
+    'spaces in a paragraph': 'a' + ' '.repeat(N - 4) + 'b\nc',
+    'tabs in a paragraph': 'a' + '\t'.repeat(N - 2) + 'b',
+    'spaces in a heading': '# a' + ' '.repeat(N - 4) + 'b',
+    'hard-break spaces on many lines': 'a  \n'.repeat(N / 4),
+    'short lines': 'a\n'.repeat(N / 2),
+    'spaces then lines': 'a' + ' '.repeat(N / 2) + 'b' + '\nc'.repeat(N / 4),
+    'alternating delimiters': '*_'.repeat(N / 2),
+    'unclosed emphasis': 'a* '.repeat(N / 3),
+    'nested emphasis': '*a '.repeat(N / 6) + 'b*'.repeat(N / 6),
+    'nested strong': '**a '.repeat(N / 8) + 'b**'.repeat(N / 8),
+    'long runs': '*'.repeat(N / 2) + 'a' + '*'.repeat(N / 2),
+    'table delimiter': 'a|b\n-' + ' '.repeat(N - 8) + 'x',
+    'table with short rows': '|' + 'a|'.repeat(60) + '\n|' + '-|'.repeat(60) + '\n' + 'x\n'.repeat((N - 250) / 2),
+    'definition-like': '[a]: x' + ' '.repeat(N / 2) + 'y' + ' '.repeat(N / 2 - 10) + 'z',
+    'backtick runs': Array.from({ length: 440 }, (_, i) => '`'.repeat(i + 1) + 'x').join(''),
+    'unclosed code': '`a``'.repeat(N / 4),
+    'comments': '<!--'.repeat(N / 4),
+    'tags without end': '<p'.repeat(N / 2),
+    'tag with spaces': ('<p' + ' '.repeat(2000)).repeat(N / 2002),
+    'unclosed attribute': '<a x="'.repeat(N / 6),
+    'script without end': '<div>\n' + '<script>'.repeat(N / 8),
+    'block tags without end': '<div>\n' + '<p '.repeat(N / 3),
+    'url with parentheses': ('https://(' + ')'.repeat(2000) + ' ').repeat(N / 2010),
+    'url with entities': ('https://x' + '&a;'.repeat(500) + ' ').repeat(N / 2010),
+    'brackets': '['.repeat(N),
+    'nested brackets': '['.repeat(N / 2) + ']'.repeat(N / 2),
+    'links without end': '[a](b ('.repeat(N / 7),
+    'angle destination': '[a](<'.repeat(N / 5) + '>',
+    'nested images': '![x'.repeat(N / 8) + '](#a)'.repeat(N / 8),
+    'entities': '&amp'.repeat(N / 4),
+    'bare urls': '(http://'.repeat(N / 8),
+    'quotes': '> '.repeat(N / 2) + 'x',
+    'lists': '- '.repeat(N / 2) + 'x'
+  }
+  for (const [name, source] of Object.entries(cases)) {
+    assert.ok(source.length <= N + 100, `${name}: ${source.length}`)
+    const start = performance.now()
+    const blocks = p(source)
+    const ms = performance.now() - start
+    assert.ok(ms < 200, `${name}: ${ms.toFixed(0)} ms`)
+    // Deep trees would overflow the renderer, which recurses like this.
+    const depth = (nodes: unknown): number => {
+      let d = 0
+      for (const n of nodes as { c?: unknown; items?: unknown[] }[]) {
+        if (Array.isArray(n.c)) d = Math.max(d, 1 + depth(n.c))
+        if (Array.isArray(n.items)) for (const item of n.items) d = Math.max(d, 1 + depth(item))
+      }
+      return d
+    }
+    assert.ok(depth(blocks) < 200, `${name}: depth ${depth(blocks)}`)
+  }
+})
