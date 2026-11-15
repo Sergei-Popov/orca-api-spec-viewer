@@ -1,0 +1,209 @@
+import { assert, test } from 'orca/testing'
+import { analyze } from '../analyze'
+import { stringsFor } from '../i18n'
+import { getAt } from '../spec/pointer'
+import type { PageCtx } from './context'
+import { operationDetails } from '../spec/operation'
+import type { OpenApiModel } from '../spec/openapi'
+import { refName, schemaTypes } from '../spec/schema'
+import { contentRows, mediaExamples } from './openapi-pages'
+import { itemsOf, typeText } from './schema-view'
+
+function children(spec: string, name: string) {
+  const a = analyze(spec)
+  const ctx = { t: stringsFor('en'), refs: a.refs } as unknown as PageCtx
+  const path = ['components', 'schemas', name]
+  const schema = getAt(a.parsed.value, path) as Record<string, unknown>
+  return itemsOf({ ctx }, schema, { doc: '', path }).items.map((item) => `${item.role}:${item.label}`)
+}
+
+test('an array whose items lead back to itself is an items row, not an endless list', () => {
+  // Before: itemsOf flattened Node's items into Node forever (Maximum call stack size exceeded).
+  const spec = `openapi: 3.1.0
+info: { title: T, version: '1' }
+paths: {}
+components:
+  schemas:
+    Node:
+      type: [array, object]
+      properties: { id: { type: string } }
+      items: { $ref: '#/components/schemas/Node' }
+    Old:
+      type: array
+      properties: { id: { type: string } }
+      items: { $ref: '#/components/schemas/Old' }
+    A:
+      type: array
+      properties: { a: { type: string } }
+      items: { $ref: '#/components/schemas/B' }
+    B:
+      type: array
+      properties: { b: { type: string } }
+      items: { $ref: '#/components/schemas/A' }
+    List:
+      type: array
+      items: { type: object, properties: { name: { type: string } } }
+`
+  assert.deepEqual(children(spec, 'Node'), ['property:id', 'role:Items'])
+  assert.deepEqual(children(spec, 'Old'), ['property:id', 'role:Items'])
+  assert.deepEqual(children(spec, 'A'), ['property:a', 'property:b', 'role:Items'], 'B is flattened into A once, then A stops')
+  assert.deepEqual(children(spec, 'List'), ['property:name'], 'ordinary arrays of objects still show their item properties')
+})
+
+test('OpenAPI 3.0 nullable adds null only to a type given beside it', () => {
+  // Before: nullable without a type read as the type null (633 properties in Stripe), with false
+  // invalid-enum, invalid-default and invalid-example problems.
+  const spec = `openapi: 3.0.3
+info: { title: T, version: '1' }
+paths: {}
+components:
+  schemas:
+    User: { type: object, properties: { id: { type: integer } } }
+    Pet:
+      type: object
+      properties:
+        owner: { nullable: true, allOf: [{ $ref: '#/components/schemas/User' }], example: { id: 1 } }
+        status: { nullable: true, enum: [available, sold, null], default: available }
+        anything: { nullable: true, example: 42 }
+        name: { type: string, nullable: true, example: null, default: null }
+        count: { type: integer, nullable: true, enum: [1, 2, null] }
+`
+  const a = analyze(spec)
+  assert.deepEqual(a.problems.map((p) => `${p.rule} ${p.path.join('/')}`), [])
+  const ctx = { t: stringsFor('en'), refs: a.refs } as unknown as PageCtx
+  const type = (name: string) => {
+    const path = ['components', 'schemas', 'Pet', 'properties', name]
+    return typeText(ctx, getAt(a.parsed.value, path), { doc: '', path })
+  }
+  // Not `null` alone: the composition's variant, then null.
+  assert.equal(type('owner'), 'User | null')
+  assert.equal(type('anything'), '')
+  // Read from the enum's values, which do include null.
+  assert.equal(type('status'), 'string | null')
+  assert.equal(type('name'), 'string | null')
+  assert.equal(type('count'), 'integer | null')
+  assert.deepEqual(schemaTypes({ nullable: true }), [])
+  assert.deepEqual(schemaTypes({ nullable: true, properties: {} }), ['object'])
+  assert.deepEqual(schemaTypes({ type: 'string', nullable: true }), ['string', 'null'])
+  // A wrong value is still reported when a type is given.
+  const wrong = analyze(spec.replace('enum: [1, 2, null]', 'enum: [1, two, null]'))
+  assert.deepEqual(wrong.problems.map((p) => p.rule), ['invalid-enum'])
+})
+
+test('a composition without a type shows its variants', () => {
+  // Before: 633 Stripe properties (`customer`, `business_profile`) and 106 in GitHub 3.0 showed no
+  // type in the collapsed row; the variants appeared only when expanded.
+  const spec = `openapi: 3.0.3
+info: { title: T, version: '1' }
+paths: {}
+components:
+  schemas:
+    customer: { type: object, properties: { id: { type: string } } }
+    deleted_customer: { type: object, properties: { deleted: { type: boolean } } }
+    profile: { type: object }
+    Charge:
+      type: object
+      properties:
+        customer: { anyOf: [{ maxLength: 5000, type: string }, { $ref: '#/components/schemas/customer' }, { $ref: '#/components/schemas/deleted_customer' }], nullable: true }
+        business_profile: { anyOf: [{ $ref: '#/components/schemas/profile' }], nullable: true }
+        both: { allOf: [{ $ref: '#/components/schemas/customer' }, { $ref: '#/components/schemas/profile' }] }
+        both_or_null: { allOf: [{ $ref: '#/components/schemas/customer' }, { $ref: '#/components/schemas/profile' }], nullable: true }
+        ids: { oneOf: [{ type: string }, { type: array, items: { type: string } }] }
+        many: { oneOf: [{ type: string }, { type: integer }, { type: boolean }, { type: array, items: {} }, { type: object, properties: {} }] }
+        same: { oneOf: [{ type: string, format: date }, { type: string, format: date-time }] }
+        loose: { anyOf: [{ required: [id] }] }
+`
+  const a = analyze(spec)
+  const ctx = { t: stringsFor('en'), refs: a.refs } as unknown as PageCtx
+  const type = (name: string) => {
+    const path = ['components', 'schemas', 'Charge', 'properties', name]
+    return typeText(ctx, getAt(a.parsed.value, path), { doc: '', path })
+  }
+  assert.equal(type('customer'), 'string | customer | deleted_customer | null')
+  assert.equal(type('business_profile'), 'profile | null')
+  assert.equal(type('both'), 'customer & profile')
+  assert.equal(type('both_or_null'), '(customer & profile) | null')
+  assert.equal(type('ids'), 'string | array<string>')
+  assert.equal(type('many'), 'string | integer | boolean | array<any> | …')
+  assert.equal(type('same'), 'string')
+  assert.equal(type('loose'), '')
+})
+
+test('itemSchema is labelled as one item, and an anchor name has no slash', () => {
+  // Before: a JSON Lines response showed itemSchema's example as if it were the whole content,
+  // and `petdetails#pet_details_id` read `petdetails#/pet_details_id`, like a JSON Pointer.
+  const spec = `openapi: 3.2.0
+info: { title: T, version: '1' }
+paths:
+  /events:
+    get:
+      responses:
+        '200':
+          description: ok
+          content:
+            application/jsonl: { itemSchema: { type: object, properties: { id: { type: integer } } } }
+            application/json: { schema: { type: array, items: { type: integer } } }
+`
+  const a = analyze(spec)
+  const ctx = { t: stringsFor('en'), refs: a.refs } as unknown as PageCtx
+  const model = (a.model as { model: OpenApiModel }).model
+  const [jsonl, json] = operationDetails(model, a.refs, model.operations[0]).responses[0].media
+  assert.deepEqual(mediaExamples(ctx, jsonl, 'response').map((e) => [e.label, e.text]), [['One item, generated from the schema', '{\n  "id": 0\n}']])
+  assert.deepEqual(mediaExamples(ctx, json, 'response').map((e) => e.label), ['Generated from the schema'])
+  assert.equal(refName('petdetails#pet_details_id'), 'petdetails#pet_details_id')
+  assert.equal(refName('./schemas/pet.yaml#/Pet'), 'pet.yaml#/Pet')
+})
+
+test('a header defined with content shows its media type, schema and example', () => {
+  // Before: the row was the name and nothing else, inline or through a 3.2 media type $ref.
+  const a = analyze(`openapi: 3.2.0
+info: { title: T, version: '1' }
+paths:
+  /pets:
+    get:
+      parameters:
+        - { name: filter, in: query, content: { application/json: { schema: { type: object }, example: { q: 1 } } } }
+      responses:
+        '200':
+          description: ok
+          headers:
+            X-Meta: { content: { application/json: { schema: { type: object, properties: { v: { type: integer } } }, example: { v: 1 } } } }
+            X-Ref: { content: { application/json: { $ref: '#/components/mediaTypes/MetaJson' } } }
+            X-Own: { example: own, content: { text/plain: { schema: { type: string }, example: other } } }
+components:
+  mediaTypes:
+    MetaJson: { schema: { type: object, properties: { v: { type: integer } } } }
+`)
+  const model = (a.model as { model: OpenApiModel }).model
+  const details = operationDetails(model, a.refs, model.operations[0])
+  const headers = details.responses[0].headers
+  const rows = (name: string) => contentRows(headers.find((header) => header.name === name)!)
+  const show = (name: string) => rows(name).map((row) => [row.type, (row.schema?.value as { type?: string })?.type, row.example?.value])
+  assert.deepEqual(show('X-Meta'), [['application/json', 'object', { v: 1 }]])
+  assert.deepEqual(show('X-Ref'), [['application/json', 'object', undefined]])
+  assert.deepEqual(rows('X-Ref')[0].schema?.loc.path, ['components', 'mediaTypes', 'MetaJson', 'schema'])
+  // The header's own example is shown once, not the media type's as well.
+  assert.deepEqual(show('X-Own'), [['text/plain', 'string', undefined]])
+  assert.deepEqual(contentRows(details.params[0]).map((row) => row.example?.value), [{ q: 1 }])
+})
+
+test('an array with items: false is a closed tuple or an empty array, not array<any>', () => {
+  const spec = `openapi: 3.1.0
+info: { title: T, version: '1' }
+paths: {}
+components:
+  schemas:
+    Pair: { type: array, prefixItems: [{ type: string }, { $ref: '#/components/schemas/Pair' }], items: false }
+    Empty: { type: [array, 'null'], items: false }
+    Open: { type: array, prefixItems: [{ type: string }] }
+`
+  const a = analyze(spec)
+  const ctx = { t: stringsFor('en'), refs: a.refs } as unknown as PageCtx
+  const type = (name: string) => {
+    const path = ['components', 'schemas', name]
+    return typeText(ctx, getAt(a.parsed.value, path), { doc: '', path })
+  }
+  assert.equal(type('Pair'), '[string, Pair]')
+  assert.equal(type('Empty'), '[] | null')
+  assert.equal(type('Open'), 'array')
+})

@@ -1,32 +1,101 @@
 {
   "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-plugin.v2.schema.json",
   "manifestVersion": 2,
+  "execution": "sandboxed-ui",
   "id": "api-spec-viewer",
   "name": "API Spec Viewer",
   "version": "0.1.0",
-  "description": "Interactive API reference for OpenAPI 3.x, Swagger 2.0 and AsyncAPI files in YAML or JSON with any file name: operations by tag, schemas, examples, validation and search. Offline.",
+  "description": "Browse OpenAPI 3.x, Swagger 2.0, AsyncAPI 2/3, Arazzo and Overlay files in Orca's tabs: operations, schemas, code samples, search and problems. Opens openapi.yaml and *.openapi.json by itself. Independent; not affiliated with the OpenAPI Initiative, SmartBear or the AsyncAPI Initiative.",
+  "author": {
+    "name": "Sergei Popov",
+    "url": "https://github.com/Sergei-Popov"
+  },
+  "repository": "https://github.com/Sergei-Popov/orca-api-spec-viewer",
+  "license": "MIT AND ISC",
+  "icon": "images/icon.png",
+  "cover": {
+    "path": "images/cover.png",
+    "alt": "The Bookshelf API's 10 operations by tag with coloured method badges, beside Add a book, POST /books, and its request body."
+  },
+  "screenshots": [
+    {
+      "path": "images/shot-1-problems.png",
+      "alt": "A draft spec's 4 errors and 1 warning, each with its line and column, and the source at line 207: a duplicate operationId."
+    },
+    {
+      "path": "images/shot-2-operation.png",
+      "alt": "Add a book's code samples: a curl POST to /v2/books built from the examples, with JavaScript, Python and HTTPie tabs to copy."
+    },
+    {
+      "path": "images/shot-3-schema.png",
+      "alt": "The Book schema as a tree, its nested shelf open: each field's type, format, required and read-only flags, and examples."
+    },
+    {
+      "path": "images/shot-4-asyncapi.png",
+      "alt": "Greenhouse Sensors, AsyncAPI 3.0.0: Open or close the vents sends a Vent command; its Alert reply comes on greenhouse/alerts."
+    },
+    {
+      "path": "images/shot-5-arazzo.png",
+      "alt": "Borrow a book in 3 steps: findBook, borrow and confirm, each naming the operation it calls. Shown in Orca's light theme."
+    }
+  ],
   "engines": {
     "orca": ">=1.4.248"
   },
-  "execution": "sandboxed-ui",
   "pluginApi": 1,
   "contributes": {
     "customEditors": [
       {
-        "id": "api-spec-viewer",
+        "id": "api-spec",
         "title": "API Spec Viewer",
+        "icon": "icons/api-spec.png",
         "extensions": [
-          ".api-spec-viewer"
+          ".openapi.yaml",
+          ".openapi.yml",
+          ".openapi.json",
+          ".swagger.yaml",
+          ".swagger.yml",
+          ".swagger.json",
+          ".oas.yaml",
+          ".oas.yml",
+          ".oas.json",
+          ".oas3.yaml",
+          ".oas3.yml",
+          ".oas3.json",
+          ".asyncapi.yaml",
+          ".asyncapi.yml",
+          ".asyncapi.json",
+          ".arazzo.yaml",
+          ".arazzo.yml",
+          ".arazzo.json",
+          ".overlay.yaml",
+          ".overlay.yml",
+          ".overlay.json",
+          ".yaml",
+          ".yml",
+          ".json",
+          ".jsonc"
         ],
-        "entry": "editor/main.ts",
+        "filenames": [
+          "openapi.yaml",
+          "openapi.yml",
+          "openapi.json",
+          "swagger.yaml",
+          "swagger.yml",
+          "swagger.json",
+          "asyncapi.yaml",
+          "asyncapi.yml",
+          "asyncapi.json",
+          "arazzo.yaml",
+          "arazzo.yml",
+          "arazzo.json"
+        ],
+        "entry": "src/editor.ts",
+        "priority": "default",
+        "contentKind": "text",
         "frame": "isolated"
       }
     ]
   },
-  "author": {
-    "name": "Сергей Попов",
-    "url": "https://github.com/Sergei-Popov"
-  },
-  "repository": "https://github.com/Sergei-Popov/orca-api-spec-viewer",
-  "license": "MIT"
+  "capabilities": []
 }

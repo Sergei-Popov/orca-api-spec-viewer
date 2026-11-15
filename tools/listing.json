@@ -1,0 +1,166 @@
+{
+  "accent": "#3B82F6",
+  "title": [
+    "API Spec",
+    "Viewer"
+  ],
+  "icon": "images/icon.png",
+  "cover": {
+    "out": "images/cover.png",
+    "alt": "The Bookshelf API's 10 operations by tag with coloured method badges, beside Add a book, POST /books, and its request body.",
+    "tagline": "Browse and check OpenAPI and AsyncAPI files, offline.",
+    "chips": [
+      "OpenAPI 3.x",
+      "Swagger 2.0",
+      "AsyncAPI 3",
+      "Arazzo",
+      "Problems"
+    ],
+    "chipMain": 0,
+    "stage": {
+      "file": ".orca/listing/samples/bookshelf.openapi.yaml",
+      "theme": "dark",
+      "scale": 1.6,
+      "width": 550,
+      "height": 550,
+      "act": [
+        {
+          "clickText": "Add a book"
+        },
+        {
+          "wheel": [
+            400,
+            300,
+            4
+          ]
+        }
+      ],
+      "origin": {
+        "x": 0,
+        "y": 0
+      }
+    }
+  },
+  "screenshots": [
+    {
+      "out": "images/shot-1-problems.png",
+      "headline": "Catch spec errors, down to the line",
+      "alt": "A draft spec's 4 errors and 1 warning, each with its line and column, and the source at line 207: a duplicate operationId.",
+      "stage": {
+        "file": ".orca/listing/samples/bookshelf-draft.openapi.yaml",
+        "theme": "dark",
+        "act": [
+          {
+            "clickLabel": "Validation and lint results"
+          },
+          {
+            "clickLabel": "Show line 207 in the source"
+          },
+          {
+            "hover": [
+              847,
+              379
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "out": "images/shot-2-operation.png",
+      "headline": "Every operation, with code samples",
+      "alt": "Add a book's code samples: a curl POST to /v2/books built from the examples, with JavaScript, Python and HTTPie tabs to copy.",
+      "stage": {
+        "file": ".orca/listing/samples/bookshelf.openapi.yaml",
+        "theme": "dark",
+        "act": [
+          {
+            "clickText": "Add a book"
+          },
+          {
+            "wheel": [
+              700,
+              300,
+              2270
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "out": "images/shot-3-schema.png",
+      "headline": "Nested schemas that open on demand",
+      "alt": "The Book schema as a tree, its nested shelf open: each field's type, format, required and read-only flags, and examples.",
+      "stage": {
+        "file": ".orca/listing/samples/bookshelf.openapi.yaml",
+        "theme": "dark",
+        "act": [
+          {
+            "clickText": "Book"
+          },
+          {
+            "clickText": "shelf",
+            "offset": [
+              -10,
+              0
+            ]
+          },
+          {
+            "wheel": [
+              700,
+              300,
+              5
+            ]
+          },
+          {
+            "hover": [
+              700,
+              100
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "out": "images/shot-4-asyncapi.png",
+      "headline": "AsyncAPI events, channels and replies",
+      "alt": "Greenhouse Sensors, AsyncAPI 3.0.0: Open or close the vents sends a Vent command; its Alert reply comes on greenhouse/alerts.",
+      "stage": {
+        "file": ".orca/listing/samples/greenhouse.asyncapi.yaml",
+        "theme": "dark",
+        "act": [
+          {
+            "clickText": "Open or close the vents"
+          },
+          {
+            "wheel": [
+              700,
+              300,
+              146
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "out": "images/shot-5-arazzo.png",
+      "headline": "Arazzo workflows, step by step",
+      "alt": "Borrow a book in 3 steps: findBook, borrow and confirm, each naming the operation it calls. Shown in Orca's light theme.",
+      "stage": {
+        "file": ".orca/listing/samples/borrow-a-book.arazzo.yaml",
+        "theme": "light",
+        "act": [
+          {
+            "clickText": "borrowBook"
+          },
+          {
+            "wheel": [
+              700,
+              300,
+              420
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
