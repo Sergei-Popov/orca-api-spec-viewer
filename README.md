@@ -53,10 +53,10 @@ Kubernetes manifest, a `package.json`, a Swagger 1.x file, and so on).
   schema (marked as generated) when it gives none.
 - **Code samples:** curl, JavaScript `fetch`, Python `requests` and HTTPie, built from the
   operation, its first server, security and example body, with copy buttons. Every value from the
-  document is quoted for the shell and sent as text: an example such as `@.env` never makes curl
-  or HTTPie read a local file. An operation whose method is not a valid HTTP method name gets no
-  samples. API Spec Viewer never sends requests: Orca's plugin views have no network, and the page
-  says so instead of offering a "Try it out" button that could not work.
+  document is quoted for the shell and sent as text: an example such as `@notes.txt` never makes
+  curl or HTTPie read a local file. An operation whose method is not a valid HTTP method name gets
+  no samples. API Spec Viewer never sends requests: Orca's plugin views have no network, and the
+  page says so instead of offering a "Try it out" button that could not work.
 - **References:** internal `$ref` and `$dynamicRef` are followed lazily, across chains and
   cycles, relative to the nearest `$id` as JSON Schema 2020-12 does. A chain of more than 128
   references is reported rather than followed. References to other files or URLs are shown as

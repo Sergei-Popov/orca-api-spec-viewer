@@ -134,7 +134,7 @@ test('multi-document YAML shows the first document and says so', () => {
     [['yaml-documents', 'info']]
   )
   assert.equal(manifest.parsed.lines.position(manifest.problems[0].offset!).line, 5)
-  const leading = analyze('---\napiVersion: v1\nkind: ConfigMap\n---\napiVersion: v1\nkind: Secret\n')
+  const leading = analyze('---\napiVersion: v1\nkind: ConfigMap\n---\napiVersion: v1\nkind: Service\n')
   assert.deepEqual(leading.problems.map((p) => p.rule), ['yaml-documents'])
   for (const text of ['apiVersion: v1\nkind: Service\n---\n', 'openapi: 3.0.3\ninfo: { title: T, version: "1" }\npaths: {}\n---\n# end\n', 'a: 1\n...\n---\n']) {
     const result = analyze(text)
