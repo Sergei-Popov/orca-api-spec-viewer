@@ -1,0 +1,329 @@
+// Rules across the document that a table cannot express: references, unique ids, path
+// parameters, unused components, security, tags, links, channels and workflows.
+
+import type { ArazzoModel } from '../spec/arazzo'
+import type { AsyncApiModel } from '../spec/asyncapi'
+import { componentsPath, pathTemplateNames, serverList, type OpenApiModel, type Operation } from '../spec/openapi'
+import { getAt, isObject, own, str, toPointer } from '../spec/pointer'
+import { refOf, type Refs } from '../spec/refs'
+import type { WalkContext } from './walker'
+
+type Path = string[]
+
+/** References: unresolved ones are errors; another file's are one note per file. */
+export function checkRefs(ctx: WalkContext, refs: Refs): Set<string> {
+  const used = new Set<string>()
+  const external = new Map<string, { count: number; path: Path }>()
+  const cache = new Map<string, 'ok' | 'missing' | 'cycle' | 'external'>()
+  const schemaBase = ctx.family === 'swagger2' ? ['definitions'] : ['components', 'schemas']
+  for (const occurrence of ctx.refs) {
+    if (occurrence.mappingName) {
+      // A discriminator mapping that names a schema rather than referencing it.
+      const target = getAt(ctx.root, [...schemaBase, occurrence.ref])
+      if (target === undefined) ctx.problems.error('unresolved-ref', occurrence.path, { ref: occurrence.ref })
+      else used.add(toPointer([...schemaBase, occurrence.ref]))
+      continue
+    }
+    const known = cache.get(occurrence.ref + (occurrence.dynamic ? ' dyn' : ''))
+    const resolution = refs.resolve(occurrence.ref, '', occurrence.dynamic)
+    if (resolution.kind === 'external') {
+      const entry = external.get(resolution.file)
+      if (entry) entry.count++
+      else external.set(resolution.file, { count: 1, path: occurrence.path })
+      continue
+    }
+    if (resolution.kind === 'missing') {
+      ctx.problems.error('unresolved-ref', occurrence.path, { ref: occurrence.ref })
+      continue
+    }
+    if (resolution.loc.doc === '') used.add(toPointer(resolution.loc.path))
+    let state = known
+    if (!state) {
+      const followed = refs.follow(resolution.value, resolution.loc)
+      state = followed.cycle ? 'cycle' : 'ok'
+      cache.set(occurrence.ref + (occurrence.dynamic ? ' dyn' : ''), state)
+    }
+    if (state === 'cycle') ctx.problems.error('circular-ref', occurrence.path, { ref: occurrence.ref })
+  }
+  for (const [file, { count, path }] of external) ctx.problems.info('external-ref', path, { file, count })
+  return used
+}
+
+/** Components no reference reaches. Skipped for libraries (documents without operations). */
+export function checkUnused(ctx: WalkContext, used: Set<string>, sections: { base: Path; skip?: string[] }[]): void {
+  const usedPrefixes = new Set<string>()
+  for (const pointer of used) {
+    const parts = pointer.split('/')
+    for (let i = 2; i <= parts.length; i++) usedPrefixes.add(parts.slice(0, i).join('/'))
+  }
+  for (const { base } of sections) {
+    const map = getAt(ctx.root, base)
+    if (!isObject(map)) continue
+    for (const name of Object.keys(map)) {
+      const path = [...base, name]
+      if (!usedPrefixes.has(toPointer(path))) ctx.problems.warn('unused-component', path, { name, section: base.at(-1) ?? '' })
+    }
+  }
+}
+
+function resolved(refs: Refs, value: unknown, path: Path): { value: Record<string, unknown>; path: Path } | null {
+  const followed = refs.follow(value, { doc: '', path })
+  if (followed.stop || followed.cycle || followed.loc.doc !== '' || !isObject(followed.value)) return null
+  return { value: followed.value, path: followed.loc.path.slice() }
+}
+
+function paramList(refs: Refs, list: unknown, base: Path): { name: string; in: string; path: Path }[] {
+  if (!Array.isArray(list)) return []
+  const out: { name: string; in: string; path: Path }[] = []
+  list.forEach((raw, index) => {
+    const p = resolved(refs, raw, [...base, 'parameters', String(index)])
+    if (p && typeof p.value.name === 'string' && typeof p.value.in === 'string') out.push({ name: p.value.name, in: p.value.in, path: [...base, 'parameters', String(index)] })
+  })
+  return out
+}
+
+export function checkOpenApi(ctx: WalkContext, refs: Refs, model: OpenApiModel): void {
+  const all: Operation[] = [...model.operations, ...model.webhooks]
+
+  // Unique operationIds.
+  const byId = new Map<string, Operation>()
+  for (const op of all) {
+    if (!op.operationId) continue
+    const first = byId.get(op.operationId)
+    if (first) ctx.problems.error('duplicate-operation-id', [...op.declared.path, 'operationId'], { id: op.operationId, other: `${first.method.toUpperCase()} ${first.route}` })
+    else byId.set(op.operationId, op)
+  }
+
+  // Path templates against path parameters.
+  const reportedPathLevel = new Set<string>()
+  const shapes = new Map<string, string>()
+  for (const entry of model.paths) {
+    const route = entry.route
+    if (route.includes('?')) ctx.problems.error('bad-key', ['paths', route], { key: route, kind: 'path-query' })
+    const names = pathTemplateNames(route)
+    const dupes = names.filter((n, i) => names.indexOf(n) !== i)
+    for (const name of new Set(dupes)) ctx.problems.error('duplicate-param', ['paths', route], { name, in: 'path' })
+    const shape = route.replace(/\{[^{}]+\}/g, '{}')
+    const other = shapes.get(shape)
+    if (other !== undefined && other !== route) ctx.problems.error('equivalent-paths', ['paths', route], { other })
+    else shapes.set(shape, route)
+
+    for (const op of entry.operations) {
+      const pathLevel = paramList(refs, own(op.pathItem, 'parameters'), op.pathItemLoc.path.slice())
+      const opLevel = paramList(refs, own(op.op, 'parameters'), op.loc.path.slice())
+      for (const list of [pathLevel, opLevel]) {
+        const seen = new Set<string>()
+        for (const p of list) {
+          const key = `${p.in}:${p.name}`
+          if (seen.has(key)) ctx.problems.error('duplicate-param', p.path, { name: p.name, in: p.in })
+          seen.add(key)
+        }
+      }
+      const declared = new Map<string, Path>()
+      for (const p of [...pathLevel, ...opLevel]) if (p.in === 'path') declared.set(p.name, p.path)
+      for (const name of new Set(names)) {
+        if (!declared.has(name)) ctx.problems.error('path-param-undeclared', op.declared.path, { name, path: route })
+      }
+      for (const [name, at] of declared) {
+        if (names.includes(name)) continue
+        const key = toPointer(at)
+        if (reportedPathLevel.has(key)) continue
+        reportedPathLevel.add(key)
+        ctx.problems.error('path-param-unused', at, { name, path: route })
+      }
+      if (model.family === 'swagger2') {
+        const bodies = opLevel.filter((p) => p.in === 'body')
+        const merged = new Map<string, string>()
+        for (const p of [...pathLevel, ...opLevel]) merged.set(`${p.in}:${p.name}`, p.in)
+        const kinds = [...merged.values()]
+        const bodyCount = kinds.filter((k) => k === 'body').length
+        if (bodyCount > 1) ctx.problems.error('multiple-body', op.declared.path, { what: 'body' })
+        else if (bodyCount === 1 && kinds.includes('formData')) ctx.problems.error('multiple-body', (bodies[0]?.path ?? op.declared.path), { what: 'formData' })
+      }
+    }
+  }
+
+  // Security requirements name defined schemes.
+  const schemesMap = model.family === 'swagger2' ? own(model.root, 'securityDefinitions') : getAt(model.root, ['components', 'securitySchemes'])
+  const schemes = isObject(schemesMap) ? schemesMap : {}
+  const checkRequirements = (list: unknown, base: Path) => {
+    if (!Array.isArray(list)) return
+    list.forEach((req, index) => {
+      if (!isObject(req)) return
+      for (const name of Object.keys(req)) {
+        if (!Object.prototype.hasOwnProperty.call(schemes, name)) ctx.problems.error('unknown-security-scheme', [...base, String(index), name], { name })
+      }
+    })
+  }
+  checkRequirements(own(model.root, 'security'), ['security'])
+  for (const op of all) checkRequirements(own(op.op, 'security'), [...op.loc.path, 'security'])
+
+  // Server URL variables.
+  if (model.family !== 'swagger2') {
+    const servers = [...serverList(own(model.root, 'servers'), ['servers'])]
+    for (const op of all) {
+      servers.push(...serverList(own(op.op, 'servers'), [...op.loc.path, 'servers']))
+    }
+    for (const entry of model.paths) {
+      const op = entry.operations[0]
+      if (op) servers.push(...serverList(own(op.pathItem, 'servers'), [...op.pathItemLoc.path, 'servers']))
+    }
+    const done = new Set<string>()
+    for (const server of servers) {
+      const key = toPointer(server.loc.path)
+      if (done.has(key)) continue
+      done.add(key)
+      for (const name of pathTemplateNames(server.url)) {
+        if (!Object.prototype.hasOwnProperty.call(server.variables, name)) ctx.problems.error('server-variable-undefined', [...server.loc.path, 'url'], { name })
+      }
+    }
+  }
+
+  // Tags.
+  const tags = own(model.root, 'tags')
+  const declared = new Set<string>()
+  if (Array.isArray(tags)) {
+    tags.forEach((tag, index) => {
+      if (!isObject(tag) || typeof tag.name !== 'string') return
+      if (declared.has(tag.name)) ctx.problems.warn('duplicate-tag', ['tags', String(index)], { name: tag.name })
+      declared.add(tag.name)
+    })
+    tags.forEach((tag, index) => {
+      const parent = isObject(tag) ? str(own(tag, 'parent')) : undefined
+      if (parent !== undefined && !declared.has(parent)) ctx.problems.error('unknown-parent-tag', ['tags', String(index), 'parent'], { name: parent })
+    })
+  }
+  if (declared.size > 0) {
+    const reported = new Set<string>()
+    for (const op of all) {
+      op.tags.forEach((name, index) => {
+        if (declared.has(name) || reported.has(name)) return
+        reported.add(name)
+        ctx.problems.info('undeclared-tag', [...op.loc.path, 'tags', String(index)], { name })
+      })
+    }
+  }
+
+  // Links name operations that exist.
+  if (model.family !== 'swagger2') {
+    const checkLink = (raw: unknown, path: Path) => {
+      const link = resolved(refs, raw, path)
+      const id = link ? str(own(link.value, 'operationId')) : undefined
+      if (id && !byId.has(id)) ctx.problems.error('link-operation', [...(link?.path ?? path), 'operationId'], { id })
+    }
+    const links = getAt(model.root, ['components', 'links'])
+    if (isObject(links)) for (const name of Object.keys(links)) if (!refOf(links[name])) checkLink(links[name], ['components', 'links', name])
+    for (const op of all) {
+      const responses = own(op.op, 'responses')
+      if (!isObject(responses)) continue
+      for (const status of Object.keys(responses)) {
+        const response = refOf(responses[status]) ? null : responses[status]
+        const responseLinks = isObject(response) ? own(response, 'links') : undefined
+        if (!isObject(responseLinks)) continue
+        for (const name of Object.keys(responseLinks)) checkLink(responseLinks[name], [...op.loc.path, 'responses', status, 'links', name])
+      }
+    }
+  }
+}
+
+export function openApiComponentSections(model: OpenApiModel): { base: Path }[] {
+  const sections = model.family === 'swagger2' ? ['schemas', 'parameters', 'responses'] : ['schemas', 'responses', 'parameters', 'examples', 'requestBodies', 'headers', 'links', 'callbacks', 'pathItems', 'mediaTypes']
+  return sections.map((section) => ({ base: componentsPath(model.family, section) }))
+}
+
+export function checkAsyncApi(ctx: WalkContext, refs: Refs, model: AsyncApiModel): void {
+  if (model.family === 'asyncapi2') {
+    const byId = new Map<string, string>()
+    for (const op of model.operations) {
+      const id = str(own(op.op, 'operationId'))
+      if (!id) continue
+      if (byId.has(id)) ctx.problems.error('duplicate-operation-id', [...op.loc.path, 'operationId'], { id, other: byId.get(id)! })
+      else byId.set(id, `${op.channel?.id ?? ''} ${op.action}`)
+    }
+  }
+  const serverNames = new Set(model.servers.map((s) => s.name))
+  for (const channel of model.channels) {
+    const address = channel.address ?? ''
+    const names = pathTemplateNames(address)
+    const params = own(channel.value, 'parameters')
+    const declared = isObject(params) ? Object.keys(params) : []
+    for (const name of names) if (!declared.includes(name)) ctx.problems.error('channel-param-undeclared', channel.loc.path.slice(), { name, address })
+    for (const name of declared) if (!names.includes(name)) ctx.problems.warn('path-param-unused', [...channel.loc.path, 'parameters', name], { name, path: address })
+    if (model.family === 'asyncapi2') {
+      const servers = own(channel.value, 'servers')
+      if (Array.isArray(servers)) {
+        servers.forEach((name, index) => {
+          if (typeof name === 'string' && !serverNames.has(name)) ctx.problems.error('unknown-target', [...channel.loc.path, 'servers', String(index)], { target: name })
+        })
+      }
+    }
+  }
+  if (model.family === 'asyncapi3') {
+    for (const op of model.operations) {
+      if (!op.channel) continue
+      const allowed = new Set(op.channel.messages.map((m) => m.key))
+      const listed = own(op.op, 'messages')
+      if (!Array.isArray(listed)) continue
+      op.messages.forEach((message, index) => {
+        if (!message.stop && !allowed.has(message.key)) ctx.problems.warn('unknown-target', [...op.loc.path, 'messages', String(index)], { target: message.ref ?? message.name })
+      })
+    }
+  }
+}
+
+export function asyncComponentSections(model: AsyncApiModel): { base: Path }[] {
+  const sections = ['schemas', 'messages', 'parameters', 'correlationIds', 'channels', 'operations', 'servers', 'serverVariables', 'replies', 'replyAddresses', 'messageTraits', 'operationTraits']
+  void model
+  return sections.map((section) => ({ base: ['components', section] }))
+}
+
+export function checkArazzo(ctx: WalkContext, model: ArazzoModel): void {
+  const sources = new Set<string>()
+  for (const source of model.sources) {
+    if (sources.has(source.name)) ctx.problems.error('duplicate-id', [...source.loc.path, 'name'], { id: source.name })
+    sources.add(source.name)
+  }
+  const workflowIds = new Set<string>()
+  for (const workflow of model.workflows) {
+    if (workflowIds.has(workflow.workflowId)) ctx.problems.error('duplicate-id', [...workflow.loc.path, 'workflowId'], { id: workflow.workflowId })
+    workflowIds.add(workflow.workflowId)
+  }
+  const checkSourcePrefix = (value: string, path: Path) => {
+    const match = /^\$sourceDescriptions\.([^.]+)\./.exec(value)
+    if (match && !sources.has(match[1])) ctx.problems.error('unknown-target', path, { target: match[1] })
+  }
+  for (const workflow of model.workflows) {
+    const stepIds = new Set<string>()
+    for (const step of workflow.steps) {
+      if (stepIds.has(step.stepId)) ctx.problems.error('duplicate-id', [...step.loc.path, 'stepId'], { id: step.stepId })
+      stepIds.add(step.stepId)
+    }
+    const dependsOn = own(workflow.value, 'dependsOn')
+    if (Array.isArray(dependsOn)) {
+      dependsOn.forEach((id, index) => {
+        if (typeof id !== 'string') return
+        if (id.startsWith('$sourceDescriptions.')) checkSourcePrefix(id, [...workflow.loc.path, 'dependsOn', String(index)])
+        else if (!workflowIds.has(id)) ctx.problems.error('unknown-target', [...workflow.loc.path, 'dependsOn', String(index)], { target: id })
+      })
+    }
+    for (const step of workflow.steps) {
+      if (step.target?.kind === 'workflowId') {
+        if (step.target.value.startsWith('$sourceDescriptions.')) checkSourcePrefix(step.target.value, [...step.loc.path, 'workflowId'])
+        else if (!workflowIds.has(step.target.value)) ctx.problems.error('unknown-target', [...step.loc.path, 'workflowId'], { target: step.target.value })
+      } else if (step.target?.kind === 'operationId') {
+        checkSourcePrefix(step.target.value, [...step.loc.path, 'operationId'])
+      }
+      for (const key of ['onSuccess', 'onFailure']) {
+        const actions = own(step.value, key)
+        if (!Array.isArray(actions)) continue
+        actions.forEach((action, index) => {
+          if (!isObject(action) || own(action, 'type') !== 'goto') return
+          const stepId = str(own(action, 'stepId'))
+          const workflowId = str(own(action, 'workflowId'))
+          if (stepId && !stepIds.has(stepId)) ctx.problems.error('unknown-target', [...step.loc.path, key, String(index), 'stepId'], { target: stepId })
+          if (workflowId && !workflowId.startsWith('$') && !workflowIds.has(workflowId)) ctx.problems.error('unknown-target', [...step.loc.path, key, String(index), 'workflowId'], { target: workflowId })
+        })
+      }
+    }
+  }
+}
