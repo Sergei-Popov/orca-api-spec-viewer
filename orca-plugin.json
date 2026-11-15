@@ -1,0 +1,32 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-plugin.v2.schema.json",
+  "manifestVersion": 2,
+  "id": "api-spec-viewer",
+  "name": "API Spec Viewer",
+  "version": "0.1.0",
+  "description": "Interactive API reference for OpenAPI 3.x, Swagger 2.0 and AsyncAPI files in YAML or JSON with any file name: operations by tag, schemas, examples, validation and search. Offline.",
+  "engines": {
+    "orca": ">=1.4.248"
+  },
+  "execution": "sandboxed-ui",
+  "pluginApi": 1,
+  "contributes": {
+    "customEditors": [
+      {
+        "id": "api-spec-viewer",
+        "title": "API Spec Viewer",
+        "extensions": [
+          ".api-spec-viewer"
+        ],
+        "entry": "editor/main.ts",
+        "frame": "isolated"
+      }
+    ]
+  },
+  "author": {
+    "name": "Сергей Попов",
+    "url": "https://github.com/Sergei-Popov"
+  },
+  "repository": "https://github.com/Sergei-Popov/orca-api-spec-viewer",
+  "license": "MIT"
+}
