@@ -16,10 +16,11 @@ API Spec Viewer is independent; it is not affiliated with the OpenAPI Initiative
 | `*.openapi.*`, `*.swagger.*`, `*.oas.*`, `*.oas3.*`, `*.asyncapi.*`, `*.arazzo.*`, `*.overlay.*` with `.yaml`/`.yml`/`.json` | Opens in **API Spec Viewer** by default |
 | Any other `.yaml`, `.yml`, `.json`, `.jsonc`                                                  | Opens in Orca's text editor; **API Spec Viewer** is one click away in the view toggle beside Source |
 
-Orca opens plain YAML and JSON itself, so a plugin can only be offered for them, never take them
-over. Orca matches suffixes that start with a dot and exact file names, so a name such as
-`petstore-openapi.yaml` (a hyphen, not a dot) is a plain `.yaml` file: switch it to the viewer
-with the toggle, or rename it to `petstore.openapi.yaml`.
+Only the names in the first two rows open in the viewer by themselves. Orca opens plain YAML and
+JSON itself, so a plugin can only be offered for them, never take them over. Orca matches exact
+file names and suffixes that start with a dot, so `petstore-openapi.yaml` (a hyphen, not a dot),
+`api.yaml` or `spec.json` open as text: pick **API Spec Viewer** in the view toggle (Orca keeps
+that choice for the open tab only), or rename the file to `petstore.openapi.yaml`.
 
 The viewer reads the content, not the name. A YAML or JSON file that is not an API description
 gets a short page that says what it looks like instead (an empty file, a JSON Schema, a
@@ -81,7 +82,8 @@ Kubernetes manifest, a `package.json`, a Swagger 1.x file, and so on).
 - **Other files.** Orca gives an editor only the open file, never its path or the files beside
   it, so references to other files cannot load by themselves. They are shown as external, with
   a **Load referenced file…** button and drag-and-drop to add those files by hand for the
-  session.
+  session. This is best-effort: the button opens the system file picker; if your Orca blocks it
+  (or a drop), external refs stay listed as links.
 - **YAML and JSON messages** come from the parsers and are in English in both languages.
 - Read-only: the viewer never edits the file.
 

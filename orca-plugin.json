@@ -5,7 +5,7 @@
   "id": "api-spec-viewer",
   "name": "API Spec Viewer",
   "version": "0.1.0",
-  "description": "An interactive API reference in Orca's editor tabs for OpenAPI 3.0, 3.1 and 3.2, Swagger 2.0, AsyncAPI 2 and 3, Arazzo and Overlay files in YAML or JSON: operations by tag, nested schemas, examples, offline code samples, a problems panel with line numbers, and search. Read-only and offline. Independent; not affiliated with the OpenAPI Initiative, SmartBear or the AsyncAPI Initiative.",
+  "description": "An interactive API reference in Orca's editor tabs for OpenAPI 3.0, 3.1 and 3.2, Swagger 2.0, AsyncAPI 2 and 3, Arazzo and Overlay files in YAML or JSON: operations by tag, nested schemas, examples, offline code samples, a problems panel with line numbers, and search. Opens openapi.yaml, *.openapi.json and similar names by itself; any other YAML or JSON file from the view toggle. Read-only and offline. Independent; not affiliated with the OpenAPI Initiative, SmartBear or the AsyncAPI Initiative.",
   "author": {
     "name": "Sergei Popov",
     "url": "https://github.com/Sergei-Popov"
@@ -13,6 +13,42 @@
   "repository": "https://github.com/Sergei-Popov/orca-api-spec-viewer",
   "license": "MIT AND ISC",
   "icon": "images/icon.png",
+  "cover": {
+    "path": "images/cover.png",
+    "alt": "Add a book in API Spec Viewer: the request body with discriminator and oneOf tabs, curl and other code samples, and the request example on the right."
+  },
+  "screenshots": [
+    {
+      "path": "images/operation-light.png",
+      "alt": "List books with Orca's light theme: query and header parameters with types and limits, a curl sample and a response example generated from the schema.",
+      "caption": "Each operation with its parameters, code samples and examples.",
+      "theme": "light"
+    },
+    {
+      "path": "images/schema-dark.png",
+      "alt": "The Book schema with Orca's dark theme: an expanded tree with the nested shelf, a recursive link back to Book, oneOf tabs and a generated example.",
+      "caption": "Nested schemas open on demand; recursion stays a link.",
+      "theme": "dark"
+    },
+    {
+      "path": "images/problems-light.png",
+      "alt": "A draft spec with Orca's light theme: the problems panel lists 4 errors and 1 warning, such as a duplicate operationId, each with line and column.",
+      "caption": "Problems with line numbers; click one to go to its page or its line.",
+      "theme": "light"
+    },
+    {
+      "path": "images/asyncapi-dark.png",
+      "alt": "An AsyncAPI 3 file with Orca's dark theme: the send operation Open or close the vents with its channel, message payload and reply.",
+      "caption": "AsyncAPI 2 and 3: operations, channels, messages and replies.",
+      "theme": "dark"
+    },
+    {
+      "path": "images/search-light.png",
+      "alt": "Search for loan with Orca's light theme: the palette lists the Loan schema, the loans tag and two operations, with the matches highlighted.",
+      "caption": "Search paths, operationIds, schemas and descriptions with ⌘F.",
+      "theme": "light"
+    }
+  ],
   "engines": {
     "orca": ">=1.4.248"
   },
