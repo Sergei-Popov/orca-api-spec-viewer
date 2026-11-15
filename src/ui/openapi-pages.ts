@@ -5,7 +5,7 @@ import { format } from '../i18n'
 import { familyLabel } from '../spec/detect'
 import { exampleFromSchema } from '../spec/example'
 import { operationServers, operationSecurity, requirementScheme, securitySchemes, type OpenApiModel, type Operation, type ServerInfo, type TagNode } from '../spec/openapi'
-import { compareStatus, examplesOf, mediaList, operationDetails, paramView, type BodyView, type ExampleView, type HeaderView, type LinkView, type MediaView, type OperationDetails, type ParamView, type ResponseView } from '../spec/operation'
+import { compareStatus, examplesOf, mediaList, operationDetails, paramView, type BodyView, type ExampleView, type HeaderView, type LinkView, type Located, type MediaView, type OperationDetails, type ParamView, type ResponseView } from '../spec/operation'
 import { getAt, isObject, own, str, toPointer } from '../spec/pointer'
 import type { Loc } from '../spec/refs'
 import { buildRequest, renderSample, sampleLanguages, type SampleLanguage } from '../spec/samples'
@@ -370,10 +370,17 @@ function mediaSchema(ctx: PageCtx, media: MediaView, id: string): HTMLElement[] 
   const out: HTMLElement[] = []
   const desc = markdown(ctx, media.description)
   if (desc) out.push(h('div', { className: 'boxbody' }, desc))
-  const schema = media.itemSchema ?? media.schema
-  if (schema) {
+  // OpenAPI 3.2: itemSchema describes each item of a sequential media type (JSON Lines, server-sent
+  // events, …); when the whole content has a schema too, both are shown.
+  const parts: [Located | undefined, string | null, string][] = [
+    [media.schema, media.itemSchema ? ctx.t.wholeContent : null, id],
+    [media.itemSchema, ctx.t.eachItem, `${id}/itemSchema`]
+  ]
+  for (const [schema, label, key] of parts) {
+    if (!schema) continue
+    if (label) out.push(h('div', { className: 'boxbody sub' }, label))
     if (schema.stop) out.push(h('div', { className: 'boxbody' }, stopNote(ctx, schema.stop)))
-    else out.push(schemaTree(ctx, schema.value, schema.loc, id))
+    else out.push(schemaTree(ctx, schema.value, schema.loc, key))
   }
   if (media.encoding && Object.keys(media.encoding).length > 0) {
     const pairs: [Child, Child][] = Object.keys(media.encoding).map((name) => {
@@ -493,7 +500,7 @@ export function mediaExamples(ctx: PageCtx, media: MediaView, mode: 'request' | 
     const schema = media.itemSchema ?? media.schema
     if (schema && !schema.stop) {
       const value = exampleFromSchema(ctx.refs, schema.value, schema.loc, { mode })
-      if (value !== undefined) out.push({ label: ctx.t.generatedExample, ...valueText(value), generated: true })
+      if (value !== undefined) out.push({ label: media.itemSchema ? ctx.t.generatedItemExample : ctx.t.generatedExample, ...valueText(value), generated: true })
     }
   }
   return out

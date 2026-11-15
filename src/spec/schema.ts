@@ -21,7 +21,8 @@ export function refName(ref: string): string {
   }
   if (!file) return name || ref
   const base = file.split(/[\\/]/).filter(Boolean).at(-1) ?? file
-  return name ? `${base}#/${name}` : base
+  // A pointer keeps its slash; a plain-name fragment (an anchor) is written as it is.
+  return name ? `${base}#${fragment.startsWith('/') ? '/' : ''}${name}` : base
 }
 
 /**

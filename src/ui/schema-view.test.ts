@@ -3,7 +3,10 @@ import { analyze } from '../analyze'
 import { stringsFor } from '../i18n'
 import { getAt } from '../spec/pointer'
 import type { PageCtx } from './context'
-import { schemaTypes } from '../spec/schema'
+import { operationDetails } from '../spec/operation'
+import type { OpenApiModel } from '../spec/openapi'
+import { refName, schemaTypes } from '../spec/schema'
+import { mediaExamples } from './openapi-pages'
 import { itemsOf, typeText } from './schema-view'
 
 function children(spec: string, name: string) {
@@ -83,4 +86,29 @@ components:
   // A wrong value is still reported when a type is given.
   const wrong = analyze(spec.replace('enum: [1, 2, null]', 'enum: [1, two, null]'))
   assert.deepEqual(wrong.problems.map((p) => p.rule), ['invalid-enum'])
+})
+
+test('itemSchema is labelled as one item, and an anchor name has no slash', () => {
+  // Before: a JSON Lines response showed itemSchema's example as if it were the whole content,
+  // and `petdetails#pet_details_id` read `petdetails#/pet_details_id`, like a JSON Pointer.
+  const spec = `openapi: 3.2.0
+info: { title: T, version: '1' }
+paths:
+  /events:
+    get:
+      responses:
+        '200':
+          description: ok
+          content:
+            application/jsonl: { itemSchema: { type: object, properties: { id: { type: integer } } } }
+            application/json: { schema: { type: array, items: { type: integer } } }
+`
+  const a = analyze(spec)
+  const ctx = { t: stringsFor('en'), refs: a.refs } as unknown as PageCtx
+  const model = (a.model as { model: OpenApiModel }).model
+  const [jsonl, json] = operationDetails(model, a.refs, model.operations[0]).responses[0].media
+  assert.deepEqual(mediaExamples(ctx, jsonl, 'response').map((e) => [e.label, e.text]), [['One item, generated from the schema', '{\n  "id": 0\n}']])
+  assert.deepEqual(mediaExamples(ctx, json, 'response').map((e) => e.label), ['Generated from the schema'])
+  assert.equal(refName('petdetails#pet_details_id'), 'petdetails#pet_details_id')
+  assert.equal(refName('./schemas/pet.yaml#/Pet'), 'pet.yaml#/Pet')
 })
