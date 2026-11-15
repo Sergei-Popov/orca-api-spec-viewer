@@ -1,7 +1,7 @@
 import { assert, test } from 'orca/testing'
 import { analyze } from '../analyze'
 import { ancestorsOf, defaultExpanded, flattenNav, navTree, pageFor, pageIndex, type NavLabels } from './nav'
-import { buildSearchIndex, search } from './search'
+import { buildSearchIndex, search, searchCounted } from './search'
 
 const labels: NavLabels = {
   overview: 'Overview',
@@ -96,4 +96,27 @@ test('search ranks titles first and finds descriptions and property names', () =
   assert.deepEqual(titles('customers'), ['orders'])
   assert.deepEqual(titles('shipped'), ['Order shipped'])
   assert.deepEqual(titles(''), [])
+})
+
+test('search shows an operation path once, and counts every match past the first 200', () => {
+  const entries = buildSearchIndex(
+    analyze(`openapi: 3.1.0
+info: { title: Books, version: "1" }
+paths:
+  /loans:
+    post: { summary: Borrow a book, tags: [loans], responses: { '201': { description: ok } } }
+  /loans/{loanId}/return:
+    post: { summary: Return a book, tags: [loans], responses: { '200': { description: ok } } }
+`).model
+  )
+  for (const hit of search(entries, 'loan')) {
+    if (hit.entry.kind !== 'operation') continue
+    assert.ok(hit.entry.detail?.startsWith('/loans'))
+    assert.equal(hit.snippet, undefined, `${hit.entry.title}: the path is the detail line already`)
+  }
+  const many = ['openapi: 3.1.0', 'info: { title: T, version: "1" }', 'paths:']
+  for (let i = 0; i < 300; i++) many.push(`  /items/${i}:`, `    get: { summary: Item ${i}, responses: { '200': { description: ok } } }`)
+  const counted = searchCounted(buildSearchIndex(analyze(many.join('\n')).model), 'item')
+  assert.equal(counted.hits.length, 200)
+  assert.equal(counted.total, 300)
 })

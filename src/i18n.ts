@@ -82,6 +82,7 @@ const en = {
   searchKeys: '↑ ↓ move · Enter opens · Esc closes',
   searchEmpty: 'Type to search paths, operationIds, summaries, descriptions and schema names.',
   results: enPlural('result', 'results'),
+  resultsOf: (shown: number, total: number) => `${shown.toLocaleString('en')} of ${enPlural('result', 'results')(total)}`,
   kinds: {
     operation: 'Operation',
     webhook: 'Webhook',
@@ -439,6 +440,7 @@ const ru: Strings = {
   searchKeys: '↑ ↓ — выбор · Enter — открыть · Esc — закрыть',
   searchEmpty: 'Начните вводить: поиск идёт по путям, operationId, кратким и полным описаниям и именам схем.',
   results: ruPlural('результат', 'результата', 'результатов'),
+  resultsOf: (shown: number, total: number) => `${shown.toLocaleString('ru')} из ${ruPlural('результата', 'результатов', 'результатов')(total)}`,
   kinds: {
     operation: 'Операция',
     webhook: 'Вебхук',

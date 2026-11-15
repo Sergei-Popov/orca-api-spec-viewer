@@ -13,7 +13,7 @@ import type { Operation } from '../spec/openapi'
 import { fragmentToPath, isObject, own, parsePointer, str, toPointer } from '../spec/pointer'
 import type { Loc } from '../spec/refs'
 import { ancestorsOf, defaultExpanded, flattenNav, navTree, pageFor, pageIndex, type NavLabels, type NavNode, type NavRow } from '../view/nav'
-import { buildSearchIndex, search, type SearchEntry, type SearchHit } from '../view/search'
+import { buildSearchIndex, searchCounted, type SearchEntry, type SearchHit } from '../view/search'
 import { banner, chip, methodBadge, type PageCtx } from './context'
 import { append, button, clickable, copyText, h, highlight, svg } from './dom'
 import { icons } from './icons'
@@ -864,6 +864,7 @@ export class App {
     const list = h('div', { className: 'hits', role: 'listbox' })
     const foot = h('div', { className: 'pfoot' }, h('span', null, this.t.searchKeys), h('span'))
     let hits: SearchHit[] = []
+    let total = 0
     let selected = 0
     const draw = () => {
       list.replaceChildren()
@@ -897,10 +898,13 @@ export class App {
         })
         list.append(row)
       })
-      foot.lastElementChild!.textContent = this.t.results(hits.length)
+      // The palette shows the best matches; the footer says when there are more.
+      foot.lastElementChild!.textContent = total > hits.length ? this.t.resultsOf(hits.length, total) : this.t.results(hits.length)
     }
     const run = () => {
-      hits = search(entries, input.value)
+      const found = searchCounted(entries, input.value)
+      hits = found.hits
+      total = found.total
       selected = 0
       draw()
     }

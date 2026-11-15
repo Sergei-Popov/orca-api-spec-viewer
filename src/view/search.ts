@@ -137,8 +137,13 @@ function snippetOf(text: string, word: string): string {
 }
 
 export function search(entries: SearchEntry[], query: string, limit = 200): SearchHit[] {
+  return searchCounted(entries, query, limit).hits
+}
+
+/** The best `limit` hits, and how many entries matched in all. */
+export function searchCounted(entries: SearchEntry[], query: string, limit = 200): { hits: SearchHit[]; total: number } {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean)
-  if (words.length === 0) return []
+  if (words.length === 0) return { hits: [], total: 0 }
   const hits: SearchHit[] = []
   for (const e of entries) {
     let total = 0
@@ -166,8 +171,10 @@ export function search(entries: SearchEntry[], query: string, limit = 200): Sear
     // Operations are what people look for most; prefer them over components of the same words.
     if (e.kind === 'operation' || e.kind === 'webhook') total *= 1.3
     const titleHit = words.some((w) => e.fields[0].lower.includes(w))
-    hits.push({ entry: e, score: total, snippet: best && (!titleHit || best.weight === 1) ? snippetOf(best.text, words[0]) : undefined })
+    // The detail line (an operation's path) is shown anyway: a snippet of it would repeat it.
+    const repeats = best !== null && e.detail !== undefined && best.text === e.detail
+    hits.push({ entry: e, score: total, snippet: best && !repeats && (!titleHit || best.weight === 1) ? snippetOf(best.text, words[0]) : undefined })
   }
   hits.sort((a, b) => b.score - a.score || a.entry.title.localeCompare(b.entry.title))
-  return hits.slice(0, limit)
+  return { hits: hits.slice(0, limit), total: hits.length }
 }
