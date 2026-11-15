@@ -1,7 +1,7 @@
 import { assert, test } from 'orca/testing'
 import { analyze } from '../analyze'
 import { problemMessage, stringsFor } from '../i18n'
-import { flatTags, MAX_TAG_DEPTH, type OpenApiModel } from '../spec/openapi'
+import { flatTags, MAX_TAG_DEPTH, shortSummary, type OpenApiModel } from '../spec/openapi'
 import { ancestorsOf, defaultExpanded, flattenNav, navTree, pageFor, pageIndex, type NavLabels } from './nav'
 import { buildSearchIndex, search, searchCounted } from './search'
 
@@ -201,4 +201,43 @@ test('a tag parent cycle of any length is reported once, and its tags and operat
   }
   const message = problemMessage(stringsFor('en'), analyze(tagSpec([{ name: 'a', parent: 'b' }, { name: 'b', parent: 'a' }], 'a')).problems.find((p) => p.rule === 'tag-parent-cycle')!)
   assert.equal(message, 'Tag parents form a cycle of 2: a → b → a. These tags are shown at the top level.')
+})
+
+test('webhook rows show the webhook name, with a short summary as detail', () => {
+  // Before: GitHub's 276 webhooks were drawn by their summaries, 75 distinct first lines of up to
+  // 1,293 characters, and the name showed only in the tooltip.
+  const long = 'This event occurs when there is activity on a pull request. For more information, see "[About pull requests](https://docs.example.com/pulls)." And more text after that, long enough to need a cut.\n\nA second paragraph.'
+  const a = analyze(`openapi: 3.1.0
+info: { title: Hooks, version: "1" }
+webhooks:
+  pull-request-opened:
+    post: { summary: ${JSON.stringify(long)}, responses: { '200': { description: ok } } }
+  pull-request-closed:
+    post: { summary: ${JSON.stringify(long)}, responses: { '200': { description: ok } } }
+  ping:
+    post: { responses: { '200': { description: ok } } }
+`)
+  const tree = navTree(a.model, labels)
+  const hooks = tree.find((n) => n.id === 'section:webhooks')!.children!
+  assert.deepEqual(
+    hooks.map((n) => [n.label, n.detail ?? '', n.webhook]),
+    [
+      ['pull-request-opened', 'This event occurs when there is activity on a pull request.', true],
+      ['pull-request-closed', 'This event occurs when there is activity on a pull request.', true],
+      ['ping', '', true]
+    ]
+  )
+  assert.ok(hooks[0].match.includes('pull-request-opened'))
+})
+
+test('a long summary is cut to its first line, sentence or 120 characters', () => {
+  assert.equal(shortSummary('List pets'), 'List pets')
+  assert.equal(shortSummary('  First line\nsecond line'), 'First line')
+  assert.equal(shortSummary('See [the guide](https://example.com/guide) for more'), 'See the guide for more')
+  assert.equal(shortSummary('Keeps [brackets] and (parens) as they are'), 'Keeps [brackets] and (parens) as they are')
+  const words = 'word '.repeat(40).trim()
+  assert.equal(shortSummary(words).length, 120)
+  assert.ok(shortSummary(words).endsWith('…'))
+  assert.equal(shortSummary(`A sentence that ends here. ${words}`), 'A sentence that ends here.')
+  assert.equal(shortSummary(undefined), '')
 })

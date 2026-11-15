@@ -3,7 +3,7 @@
 // query matches when every word appears somewhere in an entry, and ranks title hits first.
 
 import type { Model } from '../analyze'
-import { flatTags } from '../spec/openapi'
+import { flatTags, shortSummary } from '../spec/openapi'
 import { isObject, own, str } from '../spec/pointer'
 
 export type EntryKind = 'operation' | 'webhook' | 'tag' | 'component' | 'channel' | 'message' | 'server' | 'workflow' | 'step' | 'action'
@@ -65,7 +65,7 @@ export function buildSearchIndex(model: Model | null): SearchEntry[] {
         entry(
           op.key,
           op.scope === 'webhook' ? 'webhook' : 'operation',
-          op.summary || op.route,
+          shortSummary(op.summary) || op.route,
           [field(3, op.route), field(3, op.operationId), field(2, op.tags.join(' ')), field(1, str(own(op.op, 'description')))],
           { detail: op.route, method: op.method, deprecated: op.deprecated }
         )

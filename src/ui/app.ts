@@ -9,7 +9,7 @@ import type { MarkdownHost } from '../markdown/render'
 import { parseText } from '../parse/index'
 import { familyLabel } from '../spec/detect'
 import { operationDetails } from '../spec/operation'
-import { flatTags, type Operation } from '../spec/openapi'
+import { flatTags, shortSummary, type Operation } from '../spec/openapi'
 import { fragmentToPath, isObject, own, parsePointer, str, toPointer } from '../spec/pointer'
 import type { Loc } from '../spec/refs'
 import { ancestorsOf, defaultExpanded, flattenNav, navTree, pageFor, pageIndex, type NavLabels, type NavNode, type NavRow } from '../view/nav'
@@ -266,7 +266,7 @@ export class App {
       for (const op of [...a.model.model.operations, ...a.model.model.webhooks]) {
         this.operations.set(op.key, op)
         if (op.operationId && !this.operationIds.has(op.operationId)) this.operationIds.set(op.operationId, op.key)
-        this.titles.set(op.key, { title: op.summary || op.route, method: op.method, detail: op.summary ? op.route : op.operationId })
+        this.titles.set(op.key, { title: shortSummary(op.summary) || op.route, method: op.method, detail: op.summary ? op.route : op.operationId })
       }
       for (const tag of flatTags(a.model.model.tags)) if (!this.titles.has(tag.key)) this.titles.set(tag.key, { title: tag.title })
     }
@@ -367,7 +367,7 @@ export class App {
       const op = cb.operations.find((o) => o.key === key)
       if (op) {
         this.operations.set(op.key, op)
-        this.titles.set(op.key, { title: op.summary || op.route, method: op.method, detail: op.route })
+        this.titles.set(op.key, { title: shortSummary(op.summary) || op.route, method: op.method, detail: op.route })
         return op
       }
     }
@@ -614,7 +614,7 @@ export class App {
     if (node.method) el.append(methodBadge(node.method))
     let label = node.label
     let detail = node.detail
-    const isOperation = node.key?.startsWith('op:') && node.method
+    const isOperation = node.key?.startsWith('op:') && node.method && !node.webhook
     if (isOperation && this.showPaths && node.detail && node.detail.startsWith('/')) {
       label = node.detail
       detail = node.label !== node.detail ? node.label : undefined

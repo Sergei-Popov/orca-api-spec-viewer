@@ -4,7 +4,7 @@
 
 import type { Model } from '../analyze'
 import type { AsyncApiModel } from '../spec/asyncapi'
-import { flatTags, type OpenApiModel, type Operation, type TagNode } from '../spec/openapi'
+import { flatTags, shortSummary, type OpenApiModel, type Operation, type TagNode } from '../spec/openapi'
 import { toPointer } from '../spec/pointer'
 
 export interface NavLabels {
@@ -27,6 +27,8 @@ export interface NavNode {
   detail?: string
   /** An HTTP method or an AsyncAPI action, shown as a badge. */
   method?: string
+  /** A webhook: its name is the label, with its summary as the detail, as for other items. */
+  webhook?: boolean
   deprecated?: boolean
   /** The page it opens; a section without one only groups. */
   key?: string
@@ -53,16 +55,21 @@ function lower(...parts: (string | undefined)[]): string {
 }
 
 function opNode(op: Operation): NavNode {
-  const label = op.summary || op.route
+  const summary = shortSummary(op.summary)
+  const match = lower(summary, op.route, op.operationId, op.method)
+  // A webhook is told apart by its name: GitHub's 276 share 75 long summaries.
+  if (op.scope === 'webhook') {
+    return { id: op.key, key: op.key, kind: 'item', label: op.route, detail: summary || op.operationId, method: op.method, deprecated: op.deprecated, webhook: true, match }
+  }
   return {
     id: op.key,
     key: op.key,
     kind: 'item',
-    label,
-    detail: op.summary ? op.route : op.operationId,
+    label: summary || op.route,
+    detail: summary ? op.route : op.operationId,
     method: op.method,
     deprecated: op.deprecated,
-    match: lower(label, op.route, op.operationId, op.method)
+    match
   }
 }
 
