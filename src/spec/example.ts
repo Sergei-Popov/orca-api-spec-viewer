@@ -66,7 +66,7 @@ function build(refs: Refs, raw: unknown, loc: Loc, state: State, depth: number, 
   }
   if (depth > state.maxDepth) return undefined
   const at = followed.loc
-  const sub = (value: unknown, ...segments: string[]) => build(refs, value, { doc: at.doc, path: [...at.path, ...segments] }, state, depth + 1, seen)
+  const sub = (value: unknown, ...segments: string[]) => build(refs, value, { ...at, path: [...at.path, ...segments] }, state, depth + 1, seen)
 
   if (Object.prototype.hasOwnProperty.call(schema, 'example')) return own(schema, 'example')
   const examples = own(schema, 'examples')
@@ -118,7 +118,7 @@ function build(refs: Refs, raw: unknown, loc: Loc, state: State, depth: number, 
       const props = own(schema, 'properties')
       if (isObject(props)) {
         for (const name of Object.keys(props)) {
-          const prop = refs.follow(props[name], { doc: at.doc, path: [...at.path, 'properties', name] }).value
+          const prop = refs.follow(props[name], { ...at, path: [...at.path, 'properties', name] }).value
           if (isObject(prop)) {
             if (state.mode === 'request' && prop.readOnly === true) continue
             if (state.mode === 'response' && prop.writeOnly === true) continue

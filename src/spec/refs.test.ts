@@ -1,6 +1,7 @@
 import { assert, test } from 'orca/testing'
 import { analyze } from '../analyze'
 import { exampleFromSchema } from './example'
+import { getAt } from './pointer'
 import { MAX_HOPS, Refs } from './refs'
 
 function spec31(schemas: Record<string, unknown>, responseRef = '#/components/schemas/Pet'): string {
@@ -75,4 +76,141 @@ test('the reference index stays linear on deep documents', () => {
   assert.ok(performance.now() - start < 200)
   assert.equal(found.kind, 'local')
   assert.equal(found.kind === 'local' && found.loc.path.length, 3 + 2 * 199)
+})
+
+test('OpenAPI 3.2 $self is the base URI for references and $id', () => {
+  // Before: both references were "Defined in another file", and Pet was reported unused.
+  const spec = `openapi: 3.2.0
+$self: https://example.com/api/openapi.yaml
+info: { title: T, version: '1' }
+paths:
+  /pets:
+    get:
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bySelf: { $ref: 'https://example.com/api/openapi.yaml#/components/schemas/Pet' }
+                  byFile: { $ref: 'openapi.yaml#/components/schemas/Pet' }
+                  byId: { $ref: 'https://example.com/api/schemas/owner' }
+                  byRelativeId: { $ref: 'schemas/owner' }
+                  elsewhere: { $ref: 'https://example.com/other.yaml#/Pet' }
+components:
+  schemas:
+    Pet: { type: object, properties: { name: { type: string } } }
+    Owner: { $id: schemas/owner, type: object, properties: { name: { type: string } } }
+`
+  const a = analyze(spec)
+  assert.deepEqual(a.problems.map((p) => `${p.rule} ${p.path.at(-2)}`), ['external-ref elsewhere'])
+  const at = ['paths', '/pets', 'get', 'responses', '200', 'content', 'application/json', 'schema', 'properties']
+  const target = (name: string, ref: string) => {
+    const r = a.refs.resolve(ref, '', false, [...at, name])
+    return r.kind === 'local' ? r.loc.path.join('/') : r.kind
+  }
+  assert.equal(target('bySelf', 'https://example.com/api/openapi.yaml#/components/schemas/Pet'), 'components/schemas/Pet')
+  assert.equal(target('byFile', 'openapi.yaml#/components/schemas/Pet'), 'components/schemas/Pet')
+  assert.equal(target('byId', 'https://example.com/api/schemas/owner'), 'components/schemas/Owner')
+  assert.equal(target('byRelativeId', 'schemas/owner'), 'components/schemas/Owner')
+  // Without $self the document's URI is unknown, so a file name is another file.
+  assert.equal(new Refs({ components: {} }).resolve('openapi.yaml#/components').kind, 'external')
+})
+
+test('$id and $anchor are scoped by resource URI', () => {
+  // Before: anchors were global by name, a nested relative $id matched by its text first, and
+  // relative $id chains without an absolute base were not composed.
+  const schemas = {
+    A: { $id: 'https://a.example/schema', type: 'object', properties: { n: { $ref: '#node' }, item: { $ref: 'item' } }, $defs: { N: { $anchor: 'node', type: 'string' }, I: { $id: 'item', type: 'string' } } },
+    B: { $id: 'https://b.example/schema', type: 'object', properties: { n: { $ref: '#node' }, item: { $ref: 'item' } }, $defs: { N: { $anchor: 'node', type: 'integer' }, I: { $id: 'item', type: 'integer' } } },
+    Pet: { $id: 'schemas/pet.json', type: 'object', properties: { owner: { $ref: 'owner.json' } }, $defs: { O: { $id: 'owner.json', type: 'object' } } },
+    Owner: { type: 'object', properties: { owner: { $ref: 'schemas/owner.json' } } },
+    C: { type: 'object', properties: { b: { $ref: 'https://b.example/schema#node' } } }
+  }
+  const a = analyze(spec31(schemas, '#/components/schemas/A'))
+  const follow = (schema: string, prop: string) => {
+    const at = ['components', 'schemas', schema, 'properties', prop]
+    const followed = a.refs.follow(getAt(a.refs.root(), at), { doc: '', path: at })
+    return followed.stop ? followed.stop.kind : followed.loc.path.join('/')
+  }
+  assert.equal(follow('A', 'n'), 'components/schemas/A/$defs/N')
+  assert.equal(follow('B', 'n'), 'components/schemas/B/$defs/N')
+  assert.equal(follow('C', 'b'), 'components/schemas/B/$defs/N')
+  assert.equal(follow('A', 'item'), 'components/schemas/A/$defs/I')
+  assert.equal(follow('B', 'item'), 'components/schemas/B/$defs/I')
+  assert.equal(follow('Pet', 'owner'), 'components/schemas/Pet/$defs/O')
+  assert.equal(follow('Owner', 'owner'), 'components/schemas/Pet/$defs/O')
+  assert.ok(!a.problems.some((p) => p.rule === 'unresolved-ref' || p.rule === 'external-ref'), JSON.stringify(a.problems))
+})
+
+test('$dynamicRef takes the outermost resource of the dynamic scope', () => {
+  // The generic array from the OpenAPI 3.1.1 and 3.2 Schema Object examples. Before: both arrays
+  // had items of the "allow all" default, and the example was [].
+  const schemas = {
+    genericArrayComponent: { $id: 'fully_generic_array', type: 'array', items: { $dynamicRef: '#generic-array' }, $defs: { allowAll: { $dynamicAnchor: 'generic-array' } } },
+    numberArray: { $id: 'array_of_numbers', $ref: 'fully_generic_array', $defs: { numbersOnly: { $dynamicAnchor: 'generic-array', type: 'number' } } },
+    stringArray: { $id: 'array_of_strings', $ref: 'fully_generic_array', $defs: { stringsOnly: { $dynamicAnchor: 'generic-array', type: 'string' } } },
+    typed: { type: 'object', properties: { strings: { $ref: 'array_of_strings' }, numbers: { $ref: 'array_of_numbers' } } }
+  }
+  const a = analyze(spec31(schemas, '#/components/schemas/typed'))
+  assert.deepEqual(a.problems.map((p) => p.rule), [])
+  const example = (name: string) => exampleFromSchema(a.refs, { $ref: `#/components/schemas/${name}` }, { doc: '', path: [] }, { mode: 'response' })
+  assert.deepEqual(example('stringArray'), ['string'])
+  assert.deepEqual(example('numberArray'), [0])
+  assert.deepEqual(example('typed'), { strings: ['string'], numbers: [0] })
+  // Drawn on its own, the generic array keeps its default.
+  const generic = a.refs.follow({ $ref: '#/components/schemas/genericArrayComponent' }, { doc: '', path: [] })
+  const items = a.refs.follow((generic.value as { items: unknown }).items, { ...generic.loc, path: [...generic.loc.path, 'items'] })
+  assert.deepEqual(items.loc.path, ['components', 'schemas', 'genericArrayComponent', '$defs', 'allowAll'])
+})
+
+test('the reference index looks inside names like default and enum', () => {
+  // Before: the index skipped everything under keys named default, example(s), enum or const, so
+  // the `default` response's $id and $anchor and a component named `default` were not found.
+  const spec = `openapi: 3.1.0
+info: { title: T, version: '1' }
+paths:
+  /a:
+    get:
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  err: { $ref: 'https://example.com/schemas/error' }
+                  code: { $ref: '#error-code' }
+                  setting: { $ref: 'https://example.com/schemas/setting-default' }
+                  other: { $ref: 'https://example.com/schemas/default-component' }
+        default:
+          description: Any error
+          content:
+            application/json:
+              schema:
+                $id: https://example.com/schemas/error
+                type: object
+                properties:
+                  code: { $anchor: error-code, type: integer }
+                  detail: { $ref: '#/$defs/detail' }
+                $defs:
+                  detail: { type: string }
+components:
+  schemas:
+    Settings:
+      type: object
+      properties:
+        default: { $id: https://example.com/schemas/setting-default, type: string }
+    enum:
+      type: object
+      default: { $id: https://example.com/schemas/not-a-schema }
+    default: { $id: https://example.com/schemas/default-component, type: object }
+`
+  const a = analyze(spec)
+  assert.deepEqual(a.problems.map((p) => `${p.rule} ${p.path.join('/')}`), ['unused-component components/schemas/enum'])
+  // A default value is data: a $id in it names nothing.
+  assert.equal(a.refs.resolve('https://example.com/schemas/not-a-schema').kind, 'external')
 })

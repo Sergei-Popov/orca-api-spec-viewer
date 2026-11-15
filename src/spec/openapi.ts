@@ -141,11 +141,14 @@ export function buildOpenApi(root: Record<string, unknown>, family: Family, refs
       model.operations.push(...entry.operations)
     }
   }
-  const webhooks = own(root, 'webhooks')
-  if (family !== 'swagger2' && family !== 'openapi30' && isObject(webhooks)) {
+  // OpenAPI 3.0 has no webhooks; Redoc's `x-webhooks` (used by GitHub's 3.0 description) has the
+  // shape of 3.1's, so it is shown the same way.
+  const field = family === 'openapi30' ? 'x-webhooks' : 'webhooks'
+  const webhooks = own(root, field)
+  if (family !== 'swagger2' && isObject(webhooks)) {
     for (const name of Object.keys(webhooks)) {
       if (name.startsWith('x-')) continue
-      const entry = pathEntry(refs, webhooks[name], { doc: '', path: ['webhooks', name] }, name, 'webhook', methods, family)
+      const entry = pathEntry(refs, webhooks[name], { doc: '', path: [field, name] }, name, 'webhook', methods, family)
       model.webhooks.push(...entry.operations)
     }
   }
@@ -275,16 +278,34 @@ function buildTags(model: OpenApiModel): void {
       node.operations.push(op)
     }
   }
-  // OpenAPI 3.2 `parent`: nest tags, refusing cycles.
+  // OpenAPI 3.2 `parent`: nest tags. A tag on a parent cycle stays at the top (the checks report
+  // the cycle), and nesting stops at MAX_TAG_DEPTH levels: deeper tags hang from the last level.
+  // Both are worked out without recursion, so any chain or cycle length is fine.
+  const parentOf = new Map<string, string>()
+  for (const name of order) {
+    const tag = nodes.get(name)!.tag
+    const parent = tag ? str(own(tag, 'parent')) : undefined
+    if (parent !== undefined && parent !== name && nodes.has(parent)) parentOf.set(name, parent)
+  }
+  const onCycle = new Set(tagParentCycles(parentOf).flat())
+  const placed = new Map<string, { parent?: string; depth: number }>()
+  for (const start of order) {
+    const chain: string[] = []
+    for (let name: string | undefined = start; name !== undefined && !placed.has(name); name = onCycle.has(name) ? undefined : parentOf.get(name)) chain.push(name)
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const name = chain[i]
+      const parent = onCycle.has(name) ? undefined : parentOf.get(name)
+      const above = parent === undefined ? undefined : placed.get(parent)!
+      if (!above) placed.set(name, { depth: 0 })
+      else if (above.depth + 1 < MAX_TAG_DEPTH) placed.set(name, { parent, depth: above.depth + 1 })
+      else placed.set(name, { parent: above.parent, depth: above.depth })
+    }
+  }
   const roots: TagNode[] = []
   for (const name of order) {
-    const node = nodes.get(name)!
-    const parent = node.tag ? str(own(node.tag, 'parent')) : undefined
-    if (parent && nodes.has(parent) && parent !== name && !isAncestor(nodes, name, parent)) {
-      nodes.get(parent)!.children.push(node)
-    } else {
-      roots.push(node)
-    }
+    const parent = placed.get(name)!.parent
+    if (parent === undefined) roots.push(nodes.get(name)!)
+    else nodes.get(parent)!.children.push(nodes.get(name)!)
   }
   if (untagged.length > 0) roots.push({ key: 'tag:', name: '', title: '', operations: untagged, children: [] })
   model.tags = roots
@@ -299,15 +320,40 @@ function buildTags(model: OpenApiModel): void {
   }
 }
 
-/** Whether `name` is an ancestor of `of` through `parent` fields. */
-function isAncestor(nodes: Map<string, TagNode>, name: string, of: string): boolean {
-  let current: string | undefined = of
-  for (let i = 0; current && i < 64; i++) {
-    if (current === name) return true
-    const tag: Record<string, unknown> | undefined = nodes.get(current)?.tag
-    current = tag ? str(own(tag, 'parent')) : undefined
+/** Levels of nested tags the viewer shows; deeper tags are shown at the last level. */
+export const MAX_TAG_DEPTH = 32
+
+/**
+ * The cycles in tag `parent` links, each as its tags in parent order. One pass: every tag is
+ * followed up its chain once.
+ */
+export function tagParentCycles(parentOf: Map<string, string>): string[][] {
+  const state = new Map<string, 'path' | 'done'>()
+  const cycles: string[][] = []
+  for (const start of parentOf.keys()) {
+    const path: string[] = []
+    let name: string | undefined = start
+    while (name !== undefined && !state.has(name)) {
+      state.set(name, 'path')
+      path.push(name)
+      name = parentOf.get(name)
+    }
+    if (name !== undefined && state.get(name) === 'path') cycles.push(path.slice(path.indexOf(name)))
+    for (const seen of path) state.set(seen, 'done')
   }
-  return false
+  return cycles
+}
+
+/** Tags and their nested tags, parents first, without recursion. */
+export function flatTags<T extends { children: T[] }>(tags: T[]): T[] {
+  const out: T[] = []
+  const stack = [...tags].reverse()
+  while (stack.length > 0) {
+    const tag = stack.pop()!
+    out.push(tag)
+    for (let i = tag.children.length - 1; i >= 0; i--) stack.push(tag.children[i])
+  }
+  return out
 }
 
 export function serversOf(root: Record<string, unknown>, family: Family): ServerInfo[] {
@@ -382,6 +428,24 @@ export function operationSecurity(model: OpenApiModel, op: Operation): { require
 export function securitySchemes(model: OpenApiModel): Record<string, unknown> {
   const map = model.family === 'swagger2' ? own(model.root, 'securityDefinitions') : getAt(model.root, ['components', 'securitySchemes'])
   return isObject(map) ? map : {}
+}
+
+export type SchemeLookup = { kind: 'local'; loc: Loc; value: unknown } | { kind: 'external'; file: string } | { kind: 'missing' }
+
+/**
+ * The scheme a security requirement names: a security scheme component of that name, or from
+ * OpenAPI 3.2 a scheme's URI (`#/components/securitySchemes/apiKey`, or one in another file).
+ */
+export function requirementScheme(model: OpenApiModel, refs: Refs, name: string): SchemeLookup {
+  const schemes = securitySchemes(model)
+  if (Object.prototype.hasOwnProperty.call(schemes, name)) {
+    return { kind: 'local', loc: { doc: '', path: [...(model.family === 'swagger2' ? ['securityDefinitions'] : ['components', 'securitySchemes']), name] }, value: schemes[name] }
+  }
+  if (model.family !== 'openapi32') return { kind: 'missing' }
+  const resolution = refs.resolve(name, '')
+  if (resolution.kind === 'local') return { kind: 'local', loc: resolution.loc, value: resolution.value }
+  if (resolution.kind === 'external') return { kind: 'external', file: resolution.file }
+  return { kind: 'missing' }
 }
 
 /** `/pets/{petId}/photos/{id}` → `['petId', 'id']`. */

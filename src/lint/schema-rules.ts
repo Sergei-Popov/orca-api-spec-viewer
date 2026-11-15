@@ -5,7 +5,7 @@
 import { isObject, own } from '../spec/pointer'
 import { schemaTypes } from '../spec/schema'
 import type { WalkContext } from './walker'
-import { jsonText, sameJson } from '../spec/json-text'
+import { duplicateIndexes, jsonText, sameJson } from '../spec/json-text'
 
 const TYPES_OLD = ['string', 'number', 'integer', 'boolean', 'array', 'object']
 const TYPES_NEW = [...TYPES_OLD, 'null']
@@ -45,17 +45,42 @@ const NOT_IN_SWAGGER2 = ['oneOf', 'anyOf', 'not', 'nullable', 'deprecated', 'wri
  * arrays, `const`, `prefixItems`).
  */
 function schemaLevel(ctx: WalkContext): number {
-  return ctx.family === 'arazzo1' || ctx.family === 'overlay1' ? 31 : ctx.level
+  return ctx.schemaLevel ?? (ctx.family === 'arazzo1' || ctx.family === 'overlay1' ? 31 : ctx.level)
+}
+
+/**
+ * The rules for an AsyncAPI schema in the given `schemaFormat`: the document's for AsyncAPI and
+ * JSON Schema, OpenAPI 3.0's for OpenAPI schemas, and none (null) for Avro, RAML, Protobuf and
+ * anything else, which are not JSON Schema at all.
+ */
+export function formatLevel(format: string, documentLevel: number): number | null {
+  const type = format.trim().toLowerCase()
+  if (/^application\/vnd\.aai\.asyncapi(?:\+json|\+yaml)?(?:;|$)/.test(type)) return documentLevel
+  if (/^application\/schema\+(?:json|yaml)(?:;|$)/.test(type)) return documentLevel
+  if (/^application\/vnd\.oai\.openapi(?:\+json|\+yaml)?(?:;|$)/.test(type)) return 30
+  return null
+}
+
+/** AsyncAPI 3's Multi Format Schema Object: `{ schemaFormat, schema }`. */
+function multiFormat(value: Record<string, unknown>, ctx: WalkContext): boolean {
+  return ctx.level === 300 && typeof value.schemaFormat === 'string' && Object.prototype.hasOwnProperty.call(value, 'schema')
 }
 
 export function checkSchemas(ctx: WalkContext): void {
   const seen = new WeakSet<object>()
-  const stack = ctx.schemas.map((s) => ({ value: s.value, path: s.path, depth: 0, paramLike: s.paramLike === true }))
+  const stack = ctx.schemas.map((s) => ({ value: s.value, path: s.path, depth: 0, paramLike: s.paramLike === true, level: s.level }))
   stack.reverse()
   let steps = 0
   while (stack.length > 0 && steps++ < 1_000_000) {
-    const { value, path, depth, paramLike } = stack.pop()!
+    const { value, path, depth, paramLike, level } = stack.pop()!
     if (value === undefined) continue
+    ctx.schemaLevel = level
+    if (isObject(value) && multiFormat(value, ctx)) {
+      const inner = formatLevel(value.schemaFormat as string, ctx.level)
+      if (inner !== null) stack.push({ value: value.schema, path: [...path, 'schema'], depth: depth + 1, paramLike: false, level: inner })
+      else if (isObject(value.schema) && typeof value.schema.$ref === 'string') ctx.refs.push({ ref: value.schema.$ref, path: [...path, 'schema', '$ref'] })
+      continue
+    }
     if (typeof value === 'boolean') {
       if (schemaLevel(ctx) < 31) ctx.problems.error('wrong-type', path, { expected: 'object', actual: 'boolean' })
       continue
@@ -67,8 +92,9 @@ export function checkSchemas(ctx: WalkContext): void {
     if (seen.has(value) || depth > 256) continue
     seen.add(value)
     const children = checkOne(value, path, ctx, paramLike)
-    for (let i = children.length - 1; i >= 0; i--) stack.push({ value: children[i].value, path: children[i].path, depth: depth + 1, paramLike: false })
+    for (let i = children.length - 1; i >= 0; i--) stack.push({ value: children[i].value, path: children[i].path, depth: depth + 1, paramLike: false, level })
   }
+  ctx.schemaLevel = undefined
 }
 
 interface Child {
@@ -92,6 +118,10 @@ function checkOne(schema: Record<string, unknown>, path: string[], ctx: WalkCont
   }
   const dynamicRef = own(schema, '$dynamicRef')
   if (typeof dynamicRef === 'string' && modern) ctx.refs.push({ ref: dynamicRef, path: [...path, '$dynamicRef'], dynamic: true })
+  // A $ref inside an extension (GitHub's x-github, Stripe's x-expansionResources) is a use too.
+  for (const key in schema) {
+    if (key.startsWith('x-') && schema[key] !== null && typeof schema[key] === 'object') ctx.loose.push({ value: schema[key], path: [...path, key] })
+  }
 
   if (old) {
     for (const keyword of MODERN_ONLY) {
@@ -137,9 +167,19 @@ function checkOne(schema: Record<string, unknown>, path: string[], ctx: WalkCont
       const composed = ['allOf', 'oneOf', 'anyOf', '$ref', 'patternProperties', 'if', 'dependentSchemas'].some((k) => own(schema, k) !== undefined)
       if (isObject(props) && !open && !composed) {
         for (const name of required as string[]) {
-          if (!Object.prototype.hasOwnProperty.call(props, name)) ctx.problems.warn('required-not-defined', [...path, 'required'], { name })
+          if (!Object.prototype.hasOwnProperty.call(props, name)) (ctx.required ??= []).push({ schema, path: [...path, 'required'], name })
         }
       }
+    }
+  }
+
+  const allOf = own(schema, 'allOf')
+  if (Array.isArray(allOf)) {
+    const parts = (ctx.allOfParts ??= { schemas: new Set(), refs: [] })
+    for (const part of allOf) {
+      if (!isObject(part)) continue
+      parts.schemas.add(part)
+      if (typeof part.$ref === 'string') parts.refs.push({ ref: part.$ref, at: path })
     }
   }
 
@@ -247,13 +287,16 @@ function checkValues(schema: Record<string, unknown>, path: string[], ctx: WalkC
       ctx.problems.warn('empty-list', [...path, 'enum'], { min: 1 })
     } else {
       allowed = enumValues
+      // Repeats are found in one pass, so an enum of tens of thousands of values stays fast.
+      const repeats = new Set(duplicateIndexes(enumValues))
       enumValues.forEach((value, index) => {
         if (!fitsTypes(value, types)) ctx.problems.error('invalid-enum', [...path, 'enum', String(index)], { value: show(value), type: types.join(' | ') })
-        else if (enumValues.findIndex((other) => sameValue(other, value)) !== index) ctx.problems.warn('invalid-enum', [...path, 'enum', String(index)], { value: show(value), type: 'unique' })
+        else if (repeats.has(index)) ctx.problems.warn('invalid-enum', [...path, 'enum', String(index)], { value: show(value), type: 'unique' })
       })
     }
   }
-  const nullable = types.includes('null')
+  // A null value fits a nullable schema even without a `type` (nothing constrains it then).
+  const nullable = types.includes('null') || own(schema, 'nullable') === true
   if (Object.prototype.hasOwnProperty.call(schema, 'default')) {
     const value = own(schema, 'default')
     if (!fitsTypes(value, types) && !(value === null && nullable)) {
@@ -276,7 +319,8 @@ function checkValues(schema: Record<string, unknown>, path: string[], ctx: WalkC
 
 function checkDiscriminator(schema: Record<string, unknown>, discriminator: unknown, path: string[], ctx: WalkContext): void {
   const at = [...path, 'discriminator']
-  if (schemaLevel(ctx) === 20) {
+  // Swagger 2.0 and AsyncAPI name the property with a string; OpenAPI 3 has a Discriminator Object.
+  if (schemaLevel(ctx) === 20 || schemaLevel(ctx) >= 100) {
     if (typeof discriminator !== 'string') ctx.problems.error('wrong-type', at, { expected: 'string', actual: typeof discriminator })
     return
   }
@@ -347,4 +391,16 @@ function childrenOf(schema: Record<string, unknown>, path: string[], ctx: WalkCo
     if (v !== undefined) add(v, key)
   }
   return out
+}
+
+/** Reports the `required` names no property defines, except in schemas used as `allOf` parts. */
+export function reportRequired(ctx: WalkContext, resolve: (ref: string, at: string[]) => unknown): void {
+  const parts = ctx.allOfParts?.schemas ?? new Set<object>()
+  for (const { ref, at } of ctx.allOfParts?.refs ?? []) {
+    const target = resolve(ref, at)
+    if (isObject(target)) parts.add(target)
+  }
+  for (const { schema, path, name } of ctx.required ?? []) {
+    if (!parts.has(schema)) ctx.problems.warn('required-not-defined', path, { name })
+  }
 }

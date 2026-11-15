@@ -8,6 +8,8 @@ import type { FieldType, ObjectDef, WalkContext } from './walker'
 
 const ref = (obj: string): FieldType => ({ obj, ref: true })
 const obj = (name: string): FieldType => ({ obj: name })
+/** A Media Type Object, or from OpenAPI 3.2 a Reference Object to one. */
+const media = (): FieldType => ({ obj: 'MediaType', ref: 32 })
 const map = (type: FieldType, keys?: 'component'): FieldType => ({ map: type, keys })
 const list = (type: FieldType, min?: number): FieldType => ({ list: type, min })
 const oneOf = (...values: string[]): FieldType => ({ oneOf: values })
@@ -41,6 +43,13 @@ function checkParameter(value: Record<string, unknown>, path: string[], ctx: Wal
   const content = own(value, 'content')
   if (isObject(content) && Object.keys(content).length !== 1) ctx.problems.error('bad-value', [...path, 'content'], { value: `${Object.keys(content).length}`, allowed: '1' })
   exclusive(value, path, ctx, 'example', 'examples')
+  if (where === 'querystring') {
+    // The content's media type says how the whole query string is written.
+    for (const field of ['style', 'explode', 'allowReserved', 'allowEmptyValue']) {
+      if (Object.prototype.hasOwnProperty.call(value, field)) ctx.problems.error('querystring-field', [...path, field], { field })
+    }
+    return
+  }
   const style = own(value, 'style')
   if (typeof style === 'string' && typeof where === 'string' && PARAM_STYLES[where] && !PARAM_STYLES[where].includes(style)) {
     ctx.problems.error('bad-value', [...path, 'style'], { value: style, allowed: PARAM_STYLES[where].join(', ') })
@@ -122,7 +131,7 @@ const parameterFields = {
   schema: 'schema',
   example: 'any',
   examples: map(ref('Example')),
-  content: map(obj('MediaType'))
+  content: map(media())
 } as const
 
 /** OpenAPI 3.0, 3.1 and 3.2 objects. */
@@ -218,8 +227,12 @@ export function openApi3Defs(): Record<string, ObjectDef> {
         const extra = own(value, 'additionalOperations')
         if (isObject(extra)) {
           for (const method of Object.keys(extra)) {
-            if (['GET', 'PUT', 'POST', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH', 'TRACE', 'QUERY'].includes(method.toUpperCase())) {
+            const standard = ['GET', 'PUT', 'POST', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH', 'TRACE', 'QUERY']
+            if (standard.includes(method)) {
               ctx.problems.error('bad-key', [...path, 'additionalOperations', method], { key: method, kind: 'method' })
+            } else if (standard.includes(method.toUpperCase())) {
+              // Methods are case-sensitive: `get` is allowed, but is not GET and is likely a slip.
+              ctx.problems.warn('bad-key', [...path, 'additionalOperations', method], { key: method, kind: 'method-case', method: method.toUpperCase() })
             } else if (!isHttpToken(method)) {
               // RFC 9110: a method is a token. Anything else cannot be sent (or pasted into a shell).
               ctx.problems.error('bad-key', [...path, 'additionalOperations', method], { key: method, kind: 'method-token' })
@@ -231,15 +244,16 @@ export function openApi3Defs(): Record<string, ObjectDef> {
     Operation: {
       fields: operationFields,
       check: (value, path, ctx) => {
+        // Required in 3.0; optional from 3.1 on (a webhook, say, may not describe them).
         if (!Object.prototype.hasOwnProperty.call(value, 'responses')) {
           if (ctx.level === 30) ctx.problems.error('missing-responses', path)
-          else ctx.problems.warn('missing-responses', path)
+          else ctx.problems.info('missing-responses', path)
         }
       }
     },
     ExternalDocs: { fields: { description: 'string', url: 'string' }, required: ['url'] },
     Parameter: { fields: { ...parameterFields }, required: ['name', 'in'], check: checkParameter },
-    RequestBody: { fields: { description: 'string', content: map(obj('MediaType')), required: 'boolean' }, required: ['content'] },
+    RequestBody: { fields: { description: 'string', content: map(media()), required: 'boolean' }, required: ['content'] },
     MediaType: {
       fields: {
         schema: 'schema',
@@ -279,7 +293,7 @@ export function openApi3Defs(): Record<string, ObjectDef> {
         summary: ['string', 32],
         description: 'string',
         headers: map(ref('Header')),
-        content: map(obj('MediaType')),
+        content: map(media()),
         links: map(ref('Link'))
       },
       check: (value, path, ctx) => {
@@ -300,6 +314,8 @@ export function openApi3Defs(): Record<string, ObjectDef> {
         exclusive(value, path, ctx, 'value', 'externalValue')
         exclusive(value, path, ctx, 'dataValue', 'value')
         exclusive(value, path, ctx, 'serializedValue', 'value')
+        // 3.2: a serialized value is given inline or by URL, not both.
+        exclusive(value, path, ctx, 'serializedValue', 'externalValue')
       }
     },
     Link: {
@@ -318,7 +334,7 @@ export function openApi3Defs(): Record<string, ObjectDef> {
         schema: 'schema',
         example: 'any',
         examples: map(ref('Example')),
-        content: map(obj('MediaType')),
+        content: map(media()),
         name: 'any',
         in: 'any'
       },

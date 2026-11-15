@@ -37,7 +37,10 @@ export function analyze(text: string, documents?: ReadonlyMap<string, unknown>):
   const parsed = parseText(text)
   const t1 = now()
   const detection = detect(parsed.value)
-  const refs = new Refs(parsed.value)
+  // From OpenAPI 3.1 on (and in Arazzo and Overlay, which use JSON Schema 2020-12) a reference's
+  // siblings apply to what it points at.
+  const siblings = detection.spec && ['openapi31', 'openapi32', 'arazzo1', 'overlay1'].includes(detection.family)
+  const refs = new Refs(parsed.value, { siblings })
   if (documents) for (const [name, value] of documents) refs.addDocument(name, value)
   let model: Model | null = null
   if (detection.spec && isObject(parsed.value)) {

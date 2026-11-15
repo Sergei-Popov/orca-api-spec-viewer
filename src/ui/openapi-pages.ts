@@ -4,15 +4,16 @@
 import { format } from '../i18n'
 import { familyLabel } from '../spec/detect'
 import { exampleFromSchema } from '../spec/example'
-import { operationServers, operationSecurity, securitySchemes, type OpenApiModel, type Operation, type ServerInfo, type TagNode } from '../spec/openapi'
-import { compareStatus, examplesOf, mediaList, operationDetails, paramView, type BodyView, type ExampleView, type HeaderView, type LinkView, type MediaView, type OperationDetails, type ParamView, type ResponseView } from '../spec/operation'
+import { operationServers, operationSecurity, requirementScheme, securitySchemes, type OpenApiModel, type Operation, type ServerInfo, type TagNode } from '../spec/openapi'
+import { compareStatus, examplesOf, mediaList, operationDetails, paramView, type BodyView, type ExampleView, type HeaderView, type LinkView, type Located, type MediaView, type OperationDetails, type ParamView, type ResponseView } from '../spec/operation'
 import { getAt, isObject, own, str, toPointer } from '../spec/pointer'
 import type { Loc } from '../spec/refs'
-import { buildRequest, renderSample, sampleLanguages, type SampleLanguage } from '../spec/samples'
+import { buildRequest, renderSample, sampleLanguages, shellSafe, type SampleLanguage } from '../spec/samples'
 import {
   banner,
   chip,
   codeBlock,
+  cutNote,
   copyButton,
   describe,
   externalDocsEl,
@@ -28,6 +29,7 @@ import {
   statusBadge,
   stopNote,
   tabs,
+  valueText,
   valueToText,
   type PageCtx
 } from './context'
@@ -113,12 +115,32 @@ export function variablesTable(ctx: PageCtx, variables: Record<string, Record<st
   return table
 }
 
+/** Where an API key goes: `header · X-Key`. AsyncAPI's httpApiKey is OpenAPI's apiKey; its own
+ * apiKey is sent as the user or password, with no name. */
+export function schemeLocation(scheme: Record<string, unknown>): string | null {
+  const type = str(own(scheme, 'type'))
+  if (type !== 'apiKey' && type !== 'httpApiKey') return null
+  return [str(own(scheme, 'in')), str(own(scheme, 'name'))].filter(Boolean).join(' · ') || null
+}
+
+/** An OAuth flow's scopes: `scopes` in OpenAPI and AsyncAPI 2, `availableScopes` in AsyncAPI 3. */
+export function flowScopes(flow: Record<string, unknown>): unknown {
+  return own(flow, 'scopes') ?? own(flow, 'availableScopes')
+}
+
+/** AsyncAPI 3: the scopes a server or operation needs, listed on its scheme. */
+export function neededScopes(scheme: Record<string, unknown>): string[] {
+  const scopes = own(scheme, 'scopes')
+  return Array.isArray(scopes) ? scopes.map(String) : []
+}
+
 export function securitySchemeCard(ctx: PageCtx, name: string, raw: unknown, loc: Loc): HTMLElement {
   const followed = ctx.refs.follow(raw, loc)
   const scheme = isObject(followed.value) ? followed.value : {}
   const type = str(own(scheme, 'type')) ?? ''
   const pairs: [Child, Child][] = [[ctx.t.type, h('span', { className: 'mono' }, type)]]
-  if (type === 'apiKey') pairs.push(['in', h('span', { className: 'mono' }, `${str(own(scheme, 'in')) ?? ''} · ${str(own(scheme, 'name')) ?? ''}`)])
+  const where = schemeLocation(scheme)
+  if (where) pairs.push(['in', h('span', { className: 'mono' }, where)])
   if (type === 'http') {
     pairs.push(['scheme', h('span', { className: 'mono' }, str(own(scheme, 'scheme')) ?? '')])
     if (str(own(scheme, 'bearerFormat'))) pairs.push(['bearerFormat', h('span', { className: 'mono' }, str(own(scheme, 'bearerFormat'))!)])
@@ -137,8 +159,10 @@ export function securitySchemeCard(ctx: PageCtx, name: string, raw: unknown, loc
   const flows = own(scheme, 'flows')
   const scopesOf = (value: unknown): HTMLElement | null => {
     if (!isObject(value) || Object.keys(value).length === 0) return null
-    const table = h('table', { className: 'ptable' })
-    for (const scope of Object.keys(value).slice(0, 200)) table.append(h('tr', null, h('td', { className: 'name' }, h('span', { className: 'pname' }, scope)), h('td', null, String(value[scope] ?? ''))))
+    const table = h('table', { className: 'ptable scopes' })
+    // Scope names break after ':', '/' or '.', not inside a word.
+    const breakable = (scope: string) => scope.split(/(?<=[:/.])/).flatMap((part, i) => (i === 0 ? [part] : [h('wbr'), part]))
+    for (const scope of Object.keys(value).slice(0, 200)) table.append(h('tr', null, h('td', { className: 'name' }, h('span', { className: 'pname' }, ...breakable(scope))), h('td', null, String(value[scope] ?? ''))))
     return table
   }
   if (isObject(flows)) {
@@ -150,13 +174,15 @@ export function securitySchemeCard(ctx: PageCtx, name: string, raw: unknown, loc
       body.push(h('h3', { className: 'h' }, h('span', { className: 'mono' }, flowName)))
       const fkv = kvList(flowPairs)
       if (fkv) body.push(fkv)
-      const scopes = scopesOf(own(flow, 'scopes'))
+      const scopes = scopesOf(flowScopes(flow))
       if (scopes) body.push(h('div', { className: 'sub', style: 'margin-top:6px' }, ctx.t.scopes), h('div', { className: 'box', style: 'margin-top:4px' }, scopes))
     }
   } else {
-    const scopes = scopesOf(own(scheme, 'scopes'))
+    const scopes = Array.isArray(own(scheme, 'scopes')) ? null : scopesOf(own(scheme, 'scopes'))
     if (scopes) body.push(h('div', { className: 'sub', style: 'margin-top:6px' }, ctx.t.scopes), h('div', { className: 'box', style: 'margin-top:4px' }, scopes))
   }
+  const needed = neededScopes(scheme)
+  if (needed.length > 0) body.push(kvList([[ctx.t.requiredScopes, h('span', { className: 'mono' }, needed.join(', '))]]))
   return h('div', { className: 'box' }, h('div', { className: 'boxhead' }, svg(icons.lock), h('b', null, name)), h('div', { className: 'boxbody' }, ...body))
 }
 
@@ -268,16 +294,16 @@ export function tagPage(ctx: PageCtx, model: OpenApiModel, tag: TagNode): HTMLEl
 
 function securityLine(ctx: PageCtx, model: OpenApiModel, requirements: Record<string, unknown>[], inherited = false): HTMLElement {
   if (requirements.length === 0) return h('div', { className: 'meta' }, svg(icons.lock), ctx.t.noSecurity)
-  const base = model.family === 'swagger2' ? ['securityDefinitions'] : ['components', 'securitySchemes']
   const alternatives = requirements.map((req) => {
     const names = Object.keys(req)
     if (names.length === 0) return h('span', { className: 'sub' }, ctx.t.noSecurity)
     const parts: Child[] = []
     names.forEach((name, index) => {
       if (index > 0) parts.push(' + ')
-      const key = 'c:' + toPointer([...base, name])
+      const scheme = requirementScheme(model, ctx.refs, name)
+      const key = scheme.kind === 'local' ? 'c:' + toPointer(scheme.loc.path) : ''
       const scopes = Array.isArray(req[name]) ? (req[name] as unknown[]).filter((s): s is string => typeof s === 'string') : []
-      parts.push(ctx.titleOf(key) ? pageLink(ctx, key, name, 'link mono') : h('span', { className: 'mono' }, name))
+      parts.push(key && ctx.titleOf(key) ? pageLink(ctx, key, name, 'link mono') : h('span', { className: 'mono' }, name))
       if (scopes.length) parts.push(h('span', { className: 'sub mono' }, ` (${scopes.join(', ')})`))
     })
     return h('span', null, ...parts)
@@ -318,12 +344,23 @@ function paramTable(ctx: PageCtx, params: ParamView[], idBase: string): HTMLElem
       const desc = markdown(ctx, p.description)
       if (desc) cell.append(desc)
     }
-    for (const media of p.content) append(cell, h('div', { className: 'sub mono' }, media.type), media.schema ? schemaTree(ctx, media.schema.value, media.schema.loc, `${idBase}/${p.name}/${media.type}`) : null)
+    for (const media of p.content) {
+      append(cell, h('div', { className: 'sub mono' }, media.type), media.schema ? schemaTree(ctx, media.schema.value, media.schema.loc, `${idBase}/${p.name}/${media.type}`) : null)
+      if (!p.hasExample && p.examples.length === 0) append(cell, exampleLine(ctx, media.examples))
+    }
     if (p.hasExample) cell.append(h('div', { className: 'tvals' }, ctx.t.example + ':', h('code', null, valueToText(p.example).slice(0, 300))))
-    else if (p.examples.length > 0 && p.examples[0].hasValue) cell.append(h('div', { className: 'tvals' }, ctx.t.example + ':', h('code', null, valueToText(p.examples[0].value).slice(0, 300))))
+    else append(cell, exampleLine(ctx, p.examples))
     table.append(h('tr', null, nameCell, cell))
   }
   return table
+}
+
+/** The first example with something to show: 3.2's serialized form as written, or the value. */
+function exampleLine(ctx: PageCtx, examples: ExampleView[]): HTMLElement | null {
+  const ex = examples.find((e) => e.serializedValue !== undefined || e.hasValue)
+  if (!ex) return null
+  const text = ex.serializedValue ?? valueToText(ex.value)
+  return h('div', { className: 'tvals' }, ctx.t.example + ':', h('code', null, text.slice(0, 300)))
 }
 
 function headerTable(ctx: PageCtx, headers: HeaderView[], idBase: string): HTMLElement {
@@ -357,10 +394,17 @@ function mediaSchema(ctx: PageCtx, media: MediaView, id: string): HTMLElement[] 
   const out: HTMLElement[] = []
   const desc = markdown(ctx, media.description)
   if (desc) out.push(h('div', { className: 'boxbody' }, desc))
-  const schema = media.itemSchema ?? media.schema
-  if (schema) {
+  // OpenAPI 3.2: itemSchema describes each item of a sequential media type (JSON Lines, server-sent
+  // events, …); when the whole content has a schema too, both are shown.
+  const parts: [Located | undefined, string | null, string][] = [
+    [media.schema, media.itemSchema ? ctx.t.wholeContent : null, id],
+    [media.itemSchema, ctx.t.eachItem, `${id}/itemSchema`]
+  ]
+  for (const [schema, label, key] of parts) {
+    if (!schema) continue
+    if (label) out.push(h('div', { className: 'boxbody sub' }, label))
     if (schema.stop) out.push(h('div', { className: 'boxbody' }, stopNote(ctx, schema.stop)))
-    else out.push(schemaTree(ctx, schema.value, schema.loc, id))
+    else out.push(schemaTree(ctx, schema.value, schema.loc, key))
   }
   if (media.encoding && Object.keys(media.encoding).length > 0) {
     const pairs: [Child, Child][] = Object.keys(media.encoding).map((name) => {
@@ -460,10 +504,19 @@ function linksTable(ctx: PageCtx, links: LinkView[]): HTMLElement {
 }
 
 /** The examples to show for a media type: the given ones, else one generated from its schema. */
-export function mediaExamples(ctx: PageCtx, media: MediaView, mode: 'request' | 'response'): { label: string; text: string; generated: boolean; external?: string }[] {
-  const out: { label: string; text: string; generated: boolean; external?: string }[] = []
+export interface MediaExample {
+  label: string
+  text: string
+  generated: boolean
+  /** The text was cut short: it is shown plain, with a note. */
+  cut?: boolean
+  external?: string
+}
+
+export function mediaExamples(ctx: PageCtx, media: MediaView, mode: 'request' | 'response'): MediaExample[] {
+  const out: MediaExample[] = []
   for (const ex of media.examples.slice(0, 20)) {
-    if (ex.hasValue) out.push({ label: ex.summary ?? ex.name, text: valueToText(ex.value), generated: false })
+    if (ex.hasValue) out.push({ label: ex.summary ?? ex.name, ...valueText(ex.value), generated: false })
     else if (ex.serializedValue !== undefined) out.push({ label: ex.summary ?? ex.name, text: ex.serializedValue, generated: false })
     else if (ex.externalValue) out.push({ label: ex.summary ?? ex.name, text: '', generated: false, external: ex.externalValue })
   }
@@ -471,7 +524,7 @@ export function mediaExamples(ctx: PageCtx, media: MediaView, mode: 'request' | 
     const schema = media.itemSchema ?? media.schema
     if (schema && !schema.stop) {
       const value = exampleFromSchema(ctx.refs, schema.value, schema.loc, { mode })
-      if (value !== undefined) out.push({ label: ctx.t.generatedExample, text: valueToText(value), generated: true })
+      if (value !== undefined) out.push({ label: media.itemSchema ? ctx.t.generatedItemExample : ctx.t.generatedExample, ...valueText(value), generated: true })
     }
   }
   return out
@@ -501,8 +554,9 @@ function exampleBox(ctx: PageCtx, id: string, title: Child, choices: { value: st
         return
       }
       if (ex.external) body.append(h('div', { className: 'boxbody' }, format(ctx.t.externalExample, { url: '' }), externalLink(ctx, ex.external)))
-      else body.append(codeBlock(ex.text, /json|\*\/\*|^$/i.test(choice.media.type) || ex.generated ? 'json' : 'text'))
-      if (ex.generated) body.append(h('div', { className: 'note' }, svg(icons.info), ctx.t.generatedExample))
+      else body.append(codeBlock(ex.text, /json|\*\/\*|^$/i.test(choice.media.type) || ex.generated ? 'json' : 'text', ex.cut))
+      if (ex.cut) body.append(cutNote(ctx))
+      if (ex.generated) body.append(h('div', { className: 'note' }, svg(icons.info), ex.label))
     }
     if (list.length > 1) {
       sub.append(tabs(ctx, id + '#ex:' + choice.value, list.map((ex, index) => ({ value: String(index), label: ex.label })), '0', (v) => show(Number(v))))
@@ -547,6 +601,9 @@ function samplesBox(ctx: PageCtx, model: OpenApiModel, op: Operation, details: O
     code,
     h('div', { className: 'note' }, svg(icons.info), h('span', null, ctx.t.noNetwork, request.placeholderHost ? ' ' + ctx.t.placeholderHost : ''))
   )
+  if (request.placeholders) box.append(h('div', { className: 'note' }, svg(icons.info), h('span', null, format(ctx.t.samplesFillIn, { names: request.placeholders.join(', ') }))))
+  if (request.replaced) box.append(h('div', { className: 'note' }, svg(icons.info), h('span', null, ctx.t.samplesReplaced)))
+  if (!shellSafe(request)) box.append(h('div', { className: 'note' }, svg(icons.info), h('span', null, ctx.t.samplesNoShell)))
   draw(initial)
   return box
 }

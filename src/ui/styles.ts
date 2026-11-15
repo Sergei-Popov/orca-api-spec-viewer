@@ -2,7 +2,7 @@
 // themes; Orca updates the variables in place and toggles `light`/`dark` on <html>. Method and
 // status colours have a light and a dark value each, chosen to stay readable on both.
 
-const css = String.raw`
+export const css = String.raw`
 :root {
   --bg: var(--orca-background, #ffffff);
   --fg: var(--orca-foreground, #0a0a0a);
@@ -232,6 +232,7 @@ h3.h { font-size: 13px; margin: 18px 0 8px; font-weight: 600; color: var(--fg); 
 .ptable tr:first-child td { border-top: 0; }
 .ptable td.name { width: 32%; min-width: 140px; }
 .pname { font: 600 12.5px var(--mono-font); overflow-wrap: anywhere; }
+.scopes .pname { overflow-wrap: break-word; }
 .ptype { font: 12px var(--mono-font); color: var(--type); }
 .pflags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 3px; align-items: center; }
 .pdesc > .md > :first-child { margin-top: 0; } .pdesc > .md > :last-child { margin-bottom: 0; }
@@ -254,7 +255,8 @@ h3.h { font-size: 13px; margin: 18px 0 8px; font-weight: 600; color: var(--fg); 
 .tname { font: 600 12.5px var(--mono-font); overflow-wrap: anywhere; }
 .tname.role { font-family: var(--ui-font); font-weight: 600; color: var(--muted-fg); font-size: 11.5px; text-transform: uppercase; letter-spacing: .03em; }
 .ttype { font: 12px var(--mono-font); color: var(--type); }
-.tref { font: 12px var(--mono-font); color: var(--m-post); cursor: pointer; }
+.tref { font: 12px var(--mono-font); color: var(--m-post); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+.tref .icon { width: 13px; height: 13px; }
 .tref:hover { text-decoration: underline; }
 .tcons { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
 .cons { font: 11px var(--mono-font); color: var(--muted-fg); background: var(--muted); border-radius: 4px; padding: 0 5px; }

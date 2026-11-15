@@ -21,20 +21,25 @@ export function refName(ref: string): string {
   }
   if (!file) return name || ref
   const base = file.split(/[\\/]/).filter(Boolean).at(-1) ?? file
-  return name ? `${base}#/${name}` : base
+  // A pointer keeps its slash; a plain-name fragment (an anchor) is written as it is.
+  return name ? `${base}#${fragment.startsWith('/') ? '/' : ''}${name}` : base
 }
 
-/** The types a schema allows, `null` included when it is nullable. */
+/**
+ * The types a schema allows, `null` included when it is nullable. OpenAPI 3.0's `nullable` adds
+ * `null` only to a `type` given in the same schema; without one the types are not constrained.
+ */
 export function schemaTypes(schema: Schema): string[] {
   const type = own(schema, 'type')
   let types: string[] = []
   if (typeof type === 'string') types = [type]
   else if (Array.isArray(type)) types = type.filter((t): t is string => typeof t === 'string')
-  if (types.length === 0) {
+  const given = types.length > 0
+  if (!given) {
     if (isObject(own(schema, 'properties')) || own(schema, 'additionalProperties') !== undefined || isObject(own(schema, 'patternProperties'))) types = ['object']
     else if (own(schema, 'items') !== undefined || Array.isArray(own(schema, 'prefixItems'))) types = ['array']
   }
-  if (own(schema, 'nullable') === true && !types.includes('null')) types = [...types, 'null']
+  if (given && own(schema, 'nullable') === true && !types.includes('null')) types = [...types, 'null']
   return types
 }
 

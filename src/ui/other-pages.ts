@@ -3,7 +3,7 @@
 
 import { format } from '../i18n'
 import type { ArazzoModel, ArazzoWorkflow, OverlayModel } from '../spec/arazzo'
-import { asyncServerList, type AsyncApiModel, type AsyncChannel, type AsyncMessage, type AsyncOperation, type AsyncServer } from '../spec/asyncapi'
+import { asyncSecurityItems, asyncServerList, replyOf, withTraits, type AsyncApiModel, type AsyncChannel, type AsyncMessage, type AsyncOperation, type AsyncServer } from '../spec/asyncapi'
 import { familyLabel, type Detection } from '../spec/detect'
 import { exampleFromSchema } from '../spec/example'
 import { isObject, own, str, toPointer } from '../spec/pointer'
@@ -34,7 +34,7 @@ import { infoHeader, securitySchemeCard, usedBy, variablesTable } from './openap
 import { schemaTree, treeTools } from './schema-view'
 
 function child(loc: Loc, ...segments: string[]): Loc {
-  return { doc: loc.doc, path: [...loc.path, ...segments] }
+  return { ...loc, path: [...loc.path, ...segments] }
 }
 
 function bindingsBox(ctx: PageCtx, value: unknown): HTMLElement | null {
@@ -51,6 +51,31 @@ function serverVars(value: Record<string, unknown>): Record<string, Record<strin
   const out: Record<string, Record<string, unknown>> = {}
   const vars = own(value, 'variables')
   if (isObject(vars)) for (const name of Object.keys(vars)) if (isObject(vars[name])) out[name] = vars[name] as Record<string, unknown>
+  return out
+}
+
+/**
+ * A server's or operation's security: referenced schemes by name (linked), 2.x requirements by
+ * name with their scopes, and AsyncAPI 3 schemes written inline as cards.
+ */
+function asyncSecurity(ctx: PageCtx, model: AsyncApiModel, security: unknown, loc: Loc): HTMLElement[] {
+  const items = asyncSecurityItems(model.family, security)
+  if (items.length === 0) return []
+  const names: Child[] = []
+  const cards: HTMLElement[] = []
+  for (const item of items) {
+    if (item.kind === 'ref') {
+      const key = item.ref.startsWith('#/') ? 'c:' + item.ref.slice(1) : null
+      names.push(key && ctx.titleOf(key) ? pageLink(ctx, key, item.name, 'link mono') : h('span', { className: 'mono' }, item.name))
+    } else if (item.kind === 'inline') {
+      names.push(h('span', { className: 'mono' }, item.name))
+      cards.push(securitySchemeCard(ctx, item.name, item.value, child(loc, String(item.index))))
+    } else {
+      names.push(h('span', { className: 'mono' }, item.scopes.length ? `${item.name} (${item.scopes.join(', ')})` : item.name))
+    }
+  }
+  const out = [h('div', { className: 'meta' }, svg(icons.lock), ...names)]
+  if (cards.length) out.push(h('div', { className: 'cards', style: 'grid-template-columns:repeat(auto-fit,minmax(320px,1fr))' }, ...cards))
   return out
 }
 
@@ -222,41 +247,22 @@ export function asyncOperationPage(ctx: PageCtx, model: AsyncApiModel, op: Async
     if (res.kind !== 'local') page.append(stopNote(ctx, res))
   }
   append(page, ...describe(ctx, op.op))
-  const security = own(op.op, 'security')
-  if (Array.isArray(security) && security.length > 0) {
-    const names = security.map((s) => (isObject(s) ? (str(own(s, '$ref'))?.split('/').pop() ?? Object.keys(s).join(' + ')) : '')).filter(Boolean)
-    page.append(h('div', { className: 'meta' }, svg(icons.lock), ...names.map((n) => h('span', { className: 'mono' }, n))))
-  }
+  append(page, ...asyncSecurity(ctx, model, own(op.op, 'security'), child(op.loc, 'security')))
   if (op.messages.length > 0) {
     page.append(sectionTitle(2, ctx.t.messages, h('span', { className: 'sub' }, String(op.messages.length))))
     op.messages.forEach((m, index) => page.append(messageBox(ctx, model, m, `${op.key}/m${index}`)))
   }
-  const reply = own(op.op, 'reply')
-  if (isObject(reply)) {
-    const followed = ctx.refs.follow(reply, child(op.loc, 'reply'))
-    const r = isObject(followed.value) ? followed.value : {}
+  const reply = replyOf(ctx.refs, model, op)
+  if (reply) {
     page.append(sectionTitle(2, ctx.t.reply))
     const pairs: [Child, Child][] = []
-    const address = own(r, 'address')
-    if (isObject(address)) {
-      const a = ctx.refs.follow(address, child(followed.loc, 'address'))
-      if (isObject(a.value)) pairs.push([ctx.t.address, h('span', { className: 'mono' }, str(own(a.value, 'location')) ?? '')])
-    }
-    const channelRef = own(r, 'channel')
-    if (isObject(channelRef) && typeof channelRef.$ref === 'string') {
-      const ch = model.channels.find((c) => '#' + toPointer(c.loc.path) === channelRef.$ref || '#/channels/' + c.id === channelRef.$ref)
-      pairs.push([ctx.t.channel, ch ? pageLink(ctx, ch.key, ch.address ?? ch.id, 'link mono') : h('span', { className: 'mono' }, String(channelRef.$ref))])
-    }
+    if (reply.address !== undefined) pairs.push([ctx.t.address, h('span', { className: 'mono' }, reply.address)])
+    if (reply.channel) pairs.push([ctx.t.channel, pageLink(ctx, reply.channel.key, reply.channel.address ?? reply.channel.id, 'link mono')])
+    else if (reply.channelRef) pairs.push([ctx.t.channel, h('span', { className: 'mono' }, reply.channelRef)])
     const kv = kvList(pairs)
     if (kv) page.append(kv)
-    const msgs = own(r, 'messages')
-    if (Array.isArray(msgs)) {
-      msgs.forEach((raw, index) => {
-        const f = ctx.refs.follow(raw, child(followed.loc, 'messages', String(index)))
-        const value = isObject(f.value) ? f.value : {}
-        page.append(messageBox(ctx, model, { key: 'r' + index, name: str(own(value, 'name')) ?? f.loc.path.at(-1) ?? '', value, loc: f.loc, ref: f.via[0], stop: f.stop }, `${op.key}/reply${index}`))
-      })
-    }
+    // Without messages of its own a reply may be any message of its channel.
+    reply.messages.forEach((m, index) => page.append(messageBox(ctx, model, m, `${op.key}/reply${index}`)))
   }
   const bindings = bindingsBox(ctx, own(op.op, 'bindings'))
   if (bindings) page.append(sectionTitle(2, ctx.t.bindings), bindings)
@@ -328,11 +334,7 @@ export function serverPage(ctx: PageCtx, model: AsyncApiModel, server: AsyncServ
   if (str(own(server.value, 'host'))) pairs.push([ctx.t.host, h('span', { className: 'mono' }, str(own(server.value, 'host'))!)])
   const kv = kvList(pairs)
   if (kv) page.append(h('div', { style: 'margin-top:12px' }, kv))
-  const security = own(server.value, 'security')
-  if (Array.isArray(security) && security.length > 0) {
-    const names = security.map((s) => (isObject(s) ? (str(own(s, '$ref'))?.split('/').pop() ?? Object.keys(s).join(' + ')) : '')).filter(Boolean)
-    page.append(h('div', { className: 'meta' }, svg(icons.lock), ...names.map((n) => h('span', { className: 'mono' }, n))))
-  }
+  append(page, ...asyncSecurity(ctx, model, own(server.value, 'security'), child(server.loc, 'security')))
   const bindings = bindingsBox(ctx, own(server.value, 'bindings'))
   if (bindings) page.append(sectionTitle(2, ctx.t.bindings), bindings)
   const ops = model.channels.filter((ch) => asyncServerList(model, own(ch.value, 'servers')).includes(server))
@@ -356,7 +358,7 @@ export function asyncComponentPage(ctx: PageCtx, model: AsyncApiModel, section: 
     const tree = schemaTree(ctx, raw, loc, id)
     page.append(h('div', { className: 'box' }, h('div', { className: 'boxhead' }, h('b', null, ctx.t.schema), h('span', { className: 'grow' }), treeTools(ctx, id, tree)), tree))
   } else if (section === 'messages' || section === 'messageTraits') {
-    const value = isObject(followed.value) ? followed.value : {}
+    const value = isObject(followed.value) ? (section === 'messages' ? withTraits(ctx.refs, followed.value, followed.loc, model.family) : followed.value) : {}
     page.append(messageBox(ctx, model, { key: id, name, value, loc: followed.loc, ref: followed.via[0], stop: followed.stop }, id))
   } else if (section === 'securitySchemes') {
     page.append(securitySchemeCard(ctx, name, raw, loc))

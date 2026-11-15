@@ -3,7 +3,7 @@
 
 import type { ArazzoModel } from '../spec/arazzo'
 import type { AsyncApiModel } from '../spec/asyncapi'
-import { componentsPath, pathTemplateNames, serverList, type OpenApiModel, type Operation } from '../spec/openapi'
+import { componentsPath, pathTemplateNames, requirementScheme, serverList, tagParentCycles, type OpenApiModel, type Operation } from '../spec/openapi'
 import { getAt, isObject, own, str, toPointer } from '../spec/pointer'
 import { locKey, MAX_HOPS, refOf, type Refs } from '../spec/refs'
 import type { WalkContext } from './walker'
@@ -56,7 +56,65 @@ export function checkRefs(ctx: WalkContext, refs: Refs): Usages {
     else if (state === 'long') ctx.problems.warn('long-ref-chain', occurrence.path, { ref: occurrence.ref, max: MAX_HOPS })
   }
   for (const [file, { count, path }] of external) ctx.problems.info('external-ref', path, { file, count })
+  for (const { from, ref } of looseRefs(ctx.loose)) {
+    const resolution = refs.resolve(ref, '', false, from.slice(0, -1))
+    if (resolution.kind === 'local' && resolution.loc.doc === '') use(toPointer(resolution.loc.path), from)
+  }
   return used
+}
+
+/** Keys whose values are data, never references. */
+const DATA_KEYS = new Set(['example', 'default', 'enum', 'const'])
+
+/**
+ * Data inside a loose part: the keys above, a schema's `examples` list, and an Example Object's
+ * `value`. A media type's `examples` is a map of Example Objects, which may be references.
+ */
+function isData(key: string, value: unknown, objectKey: string, parentKey: string): boolean {
+  // In a map of Example Objects every key is a name (`default` included).
+  if (objectKey === 'examples') return false
+  if (DATA_KEYS.has(key)) return true
+  if (key === 'examples') return Array.isArray(value)
+  return key === 'value' && parentKey === 'examples'
+}
+
+/**
+ * The `$ref`s in parts no table describes. They only count as uses: an extension is free-form,
+ * so one that does not resolve is not reported.
+ */
+function looseRefs(parts: WalkContext['loose']): { ref: string; from: Path }[] {
+  // Each entry links to its parent, so a deep part costs no path copies: a path is built only
+  // for a reference that is found.
+  type Entry = { value: unknown; key: string; parentKey: string; parent: Entry | null; base?: Path }
+  const pathOf = (entry: Entry): Path => {
+    const keys: string[] = []
+    let at: Entry = entry
+    while (at.parent !== null) {
+      keys.push(at.key)
+      at = at.parent
+    }
+    return [...at.base!, ...keys.reverse()]
+  }
+  const out: { ref: string; from: Path }[] = []
+  const seen = new Set<object>()
+  const stack: Entry[] = parts.map((part) => ({ value: part.value, key: part.path.at(-1) ?? '', parentKey: part.path.at(-2) ?? '', parent: null, base: part.path }))
+  let budget = 1_000_000
+  while (stack.length > 0 && budget-- > 0) {
+    const entry = stack.pop()!
+    const value = entry.value
+    if (value === null || typeof value !== 'object' || seen.has(value)) continue
+    seen.add(value)
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => stack.push({ value: item, key: String(index), parentKey: entry.key, parent: entry }))
+      continue
+    }
+    const object = value as Record<string, unknown>
+    if (typeof object.$ref === 'string') out.push({ ref: object.$ref, from: [...pathOf(entry), '$ref'] })
+    for (const key of Object.keys(object)) {
+      if (!isData(key, object[key], entry.key, entry.parentKey)) stack.push({ value: object[key], key, parentKey: entry.key, parent: entry })
+    }
+  }
+  return out
 }
 
 /** Components no reference reaches. Skipped for libraries (documents without operations). */
@@ -133,6 +191,12 @@ export function checkOpenApi(ctx: WalkContext, refs: Refs, model: OpenApiModel):
           seen.add(key)
         }
       }
+      // OpenAPI 3.2: one querystring parameter at most, and never with query parameters.
+      const merged = new Map<string, (typeof opLevel)[number]>()
+      for (const p of [...pathLevel, ...opLevel]) merged.set(`${p.in}:${p.name}`, p)
+      const strings = [...merged.values()].filter((p) => p.in === 'querystring')
+      for (const p of strings.slice(1)) ctx.problems.error('querystring-conflict', p.path, { name: p.name, other: strings[0].name, kind: 'twice' })
+      if (strings.length > 0 && [...merged.values()].some((p) => p.in === 'query')) ctx.problems.error('querystring-conflict', strings[0].path, { name: strings[0].name, kind: 'query' })
       const declared = new Map<string, Path>()
       for (const p of [...pathLevel, ...opLevel]) if (p.in === 'path') declared.set(p.name, p.path)
       for (const name of new Set(names)) {
@@ -157,15 +221,15 @@ export function checkOpenApi(ctx: WalkContext, refs: Refs, model: OpenApiModel):
     }
   }
 
-  // Security requirements name defined schemes.
-  const schemesMap = model.family === 'swagger2' ? own(model.root, 'securityDefinitions') : getAt(model.root, ['components', 'securitySchemes'])
-  const schemes = isObject(schemesMap) ? schemesMap : {}
+  // Security requirements name defined schemes (in 3.2, by name or by URI).
   const checkRequirements = (list: unknown, base: Path) => {
     if (!Array.isArray(list)) return
     list.forEach((req, index) => {
       if (!isObject(req)) return
       for (const name of Object.keys(req)) {
-        if (!Object.prototype.hasOwnProperty.call(schemes, name)) ctx.problems.error('unknown-security-scheme', [...base, String(index), name], { name })
+        const scheme = requirementScheme(model, refs, name)
+        if (scheme.kind === 'missing') ctx.problems.error('unknown-security-scheme', [...base, String(index), name], { name })
+        else if (scheme.kind === 'external') ctx.problems.info('external-ref', [...base, String(index), name], { file: scheme.file, count: 1 })
       }
     })
   }
@@ -202,10 +266,23 @@ export function checkOpenApi(ctx: WalkContext, refs: Refs, model: OpenApiModel):
       if (declared.has(tag.name)) ctx.problems.warn('duplicate-tag', ['tags', String(index)], { name: tag.name })
       declared.add(tag.name)
     })
+    const parentOf = new Map<string, string>()
+    const indexOf = new Map<string, number>()
     tags.forEach((tag, index) => {
       const parent = isObject(tag) ? str(own(tag, 'parent')) : undefined
       if (parent !== undefined && !declared.has(parent)) ctx.problems.error('unknown-parent-tag', ['tags', String(index), 'parent'], { name: parent })
+      if (!isObject(tag) || typeof tag.name !== 'string' || indexOf.has(tag.name)) return
+      indexOf.set(tag.name, index)
+      if (parent !== undefined && declared.has(parent)) parentOf.set(tag.name, parent)
     })
+    // One warning per cycle, at the parent of its first tag in the document.
+    for (const cycle of tagParentCycles(parentOf)) {
+      const first = cycle.reduce((a, b) => (indexOf.get(a)! <= indexOf.get(b)! ? a : b))
+      const from = cycle.indexOf(first)
+      const ordered = [...cycle.slice(from), ...cycle.slice(0, from), first]
+      const shown = ordered.length > 6 ? [...ordered.slice(0, 5), '…', first] : ordered
+      ctx.problems.warn('tag-parent-cycle', ['tags', String(indexOf.get(first)), 'parent'], { tags: shown.join(' → '), count: cycle.length })
+    }
   }
   if (declared.size > 0) {
     const reported = new Set<string>()

@@ -5,19 +5,20 @@ import type { Problem, RuleCode } from './lint/index'
 
 type Plural = (n: number) => string
 
+const pluralRules = { en: new Intl.PluralRules('en'), ru: new Intl.PluralRules('ru') }
+
+/** English plural forms, with the count written as in English (4,354). */
 const enPlural =
   (one: string, many: string): Plural =>
   (n) =>
-    `${n.toLocaleString('en')} ${n === 1 ? one : many}`
+    `${n.toLocaleString('en')} ${pluralRules.en.select(n) === 'one' ? one : many}`
 
-/** Russian plural forms: 1 ошибка, 2 ошибки, 5 ошибок, 21 ошибка. */
+/** Russian plural forms: 1 ошибка, 2 ошибки, 5 ошибок, 21 ошибка; the count as in Russian (4 354). */
 const ruPlural =
   (one: string, few: string, many: string): Plural =>
   (n) => {
-    const tens = n % 100
-    const ones = n % 10
-    const word = tens >= 11 && tens <= 14 ? many : ones === 1 ? one : ones >= 2 && ones <= 4 ? few : many
-    return `${n.toLocaleString('ru')} ${word}`
+    const form = pluralRules.ru.select(n)
+    return `${n.toLocaleString('ru')} ${form === 'one' ? one : form === 'few' ? few : many}`
   }
 
 type Messages = Record<RuleCode, string>
@@ -74,10 +75,10 @@ const en = {
   } as Record<string, string>,
 
   filter: 'Filter',
-  filterHint: 'Filter the list (⌘F searches everything)',
+  filterHint: 'Filter the list ({key} searches everything)',
   noMatches: 'Nothing matches “{q}”.',
   search: 'Search',
-  searchHint: 'Search (⌘F)',
+  searchHint: 'Search ({key})',
   searchPlaceholder: 'Search paths, operations, schemas and descriptions',
   searchKeys: '↑ ↓ move · Enter opens · Esc closes',
   searchEmpty: 'Type to search paths, operationIds, summaries, descriptions and schema names.',
@@ -107,7 +108,7 @@ const en = {
   errors: enPlural('error', 'errors'),
   warnings: enPlural('warning', 'warnings'),
   infos: enPlural('note', 'notes'),
-  moreProblems: '{n} more problems are not listed.',
+  moreProblems: (n: number) => `${enPlural('more problem is', 'more problems are')(n)} not listed.`,
   severity: { error: 'Error', warning: 'Warning', info: 'Note' } as Record<string, string>,
   filterProblems: 'Filter problems',
   closePanel: 'Close',
@@ -179,6 +180,7 @@ const en = {
   securityInherited: 'From the document.',
   securityAny: 'Any one of these:',
   scopes: 'Scopes',
+  requiredScopes: 'Scopes needed',
   serversOverride: 'Servers for this operation',
   style: 'style',
   explode: 'explode',
@@ -189,6 +191,9 @@ const en = {
   example: 'Example',
   examples: 'Examples',
   generatedExample: 'Generated from the schema',
+  generatedItemExample: 'One item, generated from the schema',
+  eachItem: 'Each item',
+  wholeContent: 'Whole content',
   externalExample: 'External value: {url}',
   exampleCut: 'The example is cut off here.',
   mediaType: 'Media type',
@@ -212,6 +217,9 @@ const en = {
   noNetwork: 'Requests are not sent from here: Orca keeps plugin views offline. Copy a sample and run it where you have access.',
   samplesBadMethod: 'No code samples: “{method}” is not a valid HTTP method name.',
   placeholderHost: 'The document names no server, so the samples use api.example.com.',
+  samplesFillIn: 'Replace {names} with real values before you run a sample.',
+  samplesNoShell: 'A name, header or value here holds a NUL, carriage return or line break, which a shell command cannot carry safely, so there are no curl or HTTPie samples.',
+  samplesReplaced: 'A value here has a broken character (half of a UTF-16 pair); the samples show the replacement character U+FFFD in its place.',
   tryItNote: 'There is no “Try it out”: the view has no network.',
 
   type: 'Type',
@@ -370,6 +378,9 @@ const en = {
     'duplicate-tag': 'Tag “{name}” is declared twice.',
     'undeclared-tag': 'Tag “{name}” is used but not declared in the document’s tags.',
     'unknown-parent-tag': 'Parent tag “{name}” is not declared.',
+    'tag-parent-cycle': 'Tag parents form a cycle of {count}: {tags}. These tags are shown at the top level.',
+    'querystring-field': '“{field}” cannot be used with in: querystring: the media type in content says how the query string is written.',
+    'querystring-conflict': '“{name}” is in: querystring, so the operation can have no other querystring or query parameter.',
     'link-operation': 'The link names operationId “{id}”, which does not exist.',
     'multiple-body': 'An operation can have only one body; {what} parameters conflict here.',
     'schema-keyword': '“{keyword}” is not part of {version} schemas.',
@@ -384,7 +395,8 @@ const en = {
     'path-query': 'A path must not contain a query string: “{key}”.',
     status: 'Not an HTTP status code: “{key}”.',
     method: '“{key}” is a standard method; declare it as a field of the path item.',
-    'method-token': '“{key}” is not a valid HTTP method name: use letters, digits and !#$%&\'*+-.^_`|~ only.'
+    'method-token': '“{key}” is not a valid HTTP method name: use letters, digits and !#$%&\'*+-.^_`|~ only.',
+    'method-case': '“{key}” is not {method}: methods are case-sensitive. For {method}, declare it as a field of the path item.'
   } as Record<string, string>,
   duplicateEnum: 'The value {value} is listed twice.'
 }
@@ -443,10 +455,10 @@ const ru: Strings = {
   },
 
   filter: 'Фильтр',
-  filterHint: 'Отфильтровать список (⌘F — поиск по всему)',
+  filterHint: 'Отфильтровать список ({key} — поиск по всему)',
   noMatches: 'Ничего не нашлось по «{q}».',
   search: 'Поиск',
-  searchHint: 'Поиск (⌘F)',
+  searchHint: 'Поиск ({key})',
   searchPlaceholder: 'Поиск по путям, операциям, схемам и описаниям',
   searchKeys: '↑ ↓ — выбор · Enter — открыть · Esc — закрыть',
   searchEmpty: 'Начните вводить: поиск идёт по путям, operationId, кратким и полным описаниям и именам схем.',
@@ -476,7 +488,7 @@ const ru: Strings = {
   errors: ruPlural('ошибка', 'ошибки', 'ошибок'),
   warnings: ruPlural('предупреждение', 'предупреждения', 'предупреждений'),
   infos: ruPlural('замечание', 'замечания', 'замечаний'),
-  moreProblems: 'Ещё {n} проблем не показаны.',
+  moreProblems: (n: number) => `Ещё ${ruPlural('проблема не показана', 'проблемы не показаны', 'проблем не показаны')(n)}.`,
   severity: { error: 'Ошибка', warning: 'Предупреждение', info: 'Замечание' },
   filterProblems: 'Фильтр проблем',
   closePanel: 'Закрыть',
@@ -548,6 +560,7 @@ const ru: Strings = {
   securityInherited: 'Из документа.',
   securityAny: 'Любой из вариантов:',
   scopes: 'Области доступа',
+  requiredScopes: 'Нужные области доступа',
   serversOverride: 'Серверы этой операции',
   style: 'style',
   explode: 'explode',
@@ -558,6 +571,9 @@ const ru: Strings = {
   example: 'Пример',
   examples: 'Примеры',
   generatedExample: 'Построен по схеме',
+  generatedItemExample: 'Один элемент, построен по схеме',
+  eachItem: 'Каждый элемент',
+  wholeContent: 'Всё содержимое',
   externalExample: 'Внешнее значение: {url}',
   exampleCut: 'Пример обрезан здесь.',
   mediaType: 'Тип данных',
@@ -579,6 +595,9 @@ const ru: Strings = {
   noNetwork: 'Запросы отсюда не отправляются: Orca не даёт представлениям плагинов доступа к сети. Скопируйте пример и выполните его там, где есть доступ.',
   samplesBadMethod: 'Примеров кода нет: «{method}» — недопустимое имя метода HTTP.',
   placeholderHost: 'В документе не указан сервер, поэтому в примерах — api.example.com.',
+  samplesFillIn: 'Перед запуском замените {names} настоящими значениями.',
+  samplesNoShell: 'В имени, заголовке или значении есть символ NUL, возврат каретки или перевод строки: команда оболочки не может безопасно их передать, поэтому примеров curl и HTTPie нет.',
+  samplesReplaced: 'В значении есть испорченный символ (половина пары UTF-16); в примерах вместо него стоит символ замены U+FFFD.',
   tryItNote: 'Кнопки «Попробовать» нет: у представления нет сети.',
 
   type: 'Тип',
@@ -737,6 +756,9 @@ const ru: Strings = {
     'duplicate-tag': 'Тег «{name}» объявлен дважды.',
     'undeclared-tag': 'Тег «{name}» используется, но не объявлен в tags документа.',
     'unknown-parent-tag': 'Родительский тег «{name}» не объявлен.',
+    'tag-parent-cycle': 'Родительские теги замкнуты в цикл ({count}): {tags}. Эти теги показаны на верхнем уровне.',
+    'querystring-field': '«{field}» нельзя использовать с in: querystring: как записана строка запроса, задаёт тип содержимого в content.',
+    'querystring-conflict': '«{name}» — параметр in: querystring, поэтому других параметров querystring и query у операции быть не может.',
     'link-operation': 'Ссылка указывает на operationId «{id}», которого нет.',
     'multiple-body': 'У операции может быть только одно тело; здесь мешают параметры {what}.',
     'schema-keyword': '«{keyword}» не входит в схемы {version}.',
@@ -751,7 +773,8 @@ const ru: Strings = {
     'path-query': 'В пути не должно быть строки запроса: «{key}».',
     status: 'Это не код состояния HTTP: «{key}».',
     method: '«{key}» — стандартный метод; объявите его полем элемента пути.',
-    'method-token': '«{key}» — недопустимое имя метода HTTP: допустимы только буквы, цифры и !#$%&\'*+-.^_`|~.'
+    'method-token': '«{key}» — недопустимое имя метода HTTP: допустимы только буквы, цифры и !#$%&\'*+-.^_`|~.',
+    'method-case': '«{key}» — это не {method}: регистр в именах методов важен. Для {method} объявите его полем элемента пути.'
   },
   duplicateEnum: 'Значение {value} указано дважды.'
 }

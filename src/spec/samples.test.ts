@@ -2,7 +2,7 @@ import { assert, test } from 'orca/testing'
 import { analyze } from '../analyze'
 import type { OpenApiModel } from './openapi'
 import { operationDetails } from './operation'
-import { buildRequest, renderSample, sampleLanguages, type SampleRequest } from './samples'
+import { buildRequest, renderSample, sampleLanguages, shellSafe, wellFormed, type SampleRequest } from './samples'
 
 function requests(text: string): { route: string; method: string; request: SampleRequest }[] {
   const a = analyze(text)
@@ -133,10 +133,15 @@ function curlSends(sample: string): Sent {
   assert.equal(argv[0], 'curl')
   const sent: Sent = { method: 'GET', url: '', headers: [], query: [], fields: [], files: [] }
   const urls: string[] = []
+  let globoff = false
   for (let i = 1; i < argv.length; i++) {
     const word = argv[i]
     if (!word.startsWith('-')) {
       urls.push(word)
+      continue
+    }
+    if (word === '-g') {
+      globoff = true
       continue
     }
     const arg = argv[++i]
@@ -164,9 +169,10 @@ function curlSends(sample: string): Sent {
         sent.text = arg
         break
       case '--data-urlencode':
-        // curl splits at the first `=`; only without one would `name@file` read a file.
+        // curl splits at the first `=`; only without one would `name@file` read a file. The name
+        // goes out as written, so the server decodes it.
         assert.ok(eq >= 0, `--data-urlencode ${arg} reads a file`)
-        sent.fields.push([arg.slice(0, eq), arg.slice(eq + 1)])
+        sent.fields.push([decodeURIComponent(arg.slice(0, eq)), arg.slice(eq + 1)])
         break
       case '--form-string':
         assert.ok(eq > 0, arg)
@@ -182,6 +188,8 @@ function curlSends(sample: string): Sent {
   }
   assert.equal(urls.length, 1, `one URL in ${sample}`)
   sent.url = urls[0]
+  // curl would expand {a,b} and [1-3] into several requests without -g.
+  assert.equal(globoff, /[{}[\]]/.test(sent.url), `-g exactly when the URL has braces or brackets: ${sample}`)
   sent.query = queryOf(sent.url)
   return sent
 }
@@ -325,7 +333,7 @@ test('curl samples use the options that never read files', () => {
   assert.match(upload, /-F photo=@file\.bin/)
   const form = renderSample('curl', one(FILE_LIKE, '/form'))
   assert.match(form, /--data-urlencode a=@notes\.txt/)
-  assert.match(form, /--data-urlencode @b=x/, 'curl splits at the first "=", so the name is literal too')
+  assert.match(form, /--data-urlencode %40b=x/, 'curl sends the name as written, so it is encoded')
   const json = renderSample('curl', one(FILE_LIKE, '/notes'))
   assert.match(json, /-d '\{\n {2}"note": "@notes\.txt"/)
   const search = renderSample('curl', one(FILE_LIKE, '/search'))
@@ -449,4 +457,254 @@ test('a huge example is replaced by one made from the schema', () => {
   const request = one(spec, '/a')
   assert.deepEqual(request.body?.json, { n: 0 })
   for (const language of sampleLanguages(request)) assert.ok(renderSample(language, request).length < 1000, language)
+})
+
+test('an unpaired surrogate in a value becomes U+FFFD with a note, never an error', () => {
+  // Before: encodeURIComponent threw "URI malformed" and the whole operation page was lost.
+  const half = String.fromCharCode(0xd83d)
+  const spec = JSON.stringify({
+    openapi: '3.1.0',
+    info: { title: 'T', version: '1' },
+    servers: [{ url: 'https://api.test' }],
+    paths: {
+      '/items/{id}': {
+        get: {
+          parameters: [
+            { name: 'id', in: 'path', required: true, example: half },
+            { name: 'q' + String.fromCharCode(0xd800), in: 'query', required: true, example: 'x' + String.fromCharCode(0xde00) },
+            { name: 'X-Note', in: 'header', required: true, example: 'a' + half }
+          ],
+          responses: { 200: { description: 'ok' } }
+        }
+      },
+      '/ok/{id}': { get: { parameters: [{ name: 'id', in: 'path', required: true, example: '\u{1F600}' }], responses: { 200: { description: 'ok' } } } }
+    }
+  })
+  const broken = one(spec, '/items/{id}')
+  assert.equal(broken.replaced, true)
+  assert.equal(broken.url, 'https://api.test/items/%EF%BF%BD')
+  for (const language of sampleLanguages(broken)) {
+    const sample = renderSample(language, broken)
+    assert.equal(wellFormed(sample), sample, language)
+  }
+  assert.match(renderSample('curl', broken), /q%EF%BF%BD=x%EF%BF%BD/)
+  const fine = one(spec, '/ok/{id}')
+  assert.equal(fine.replaced, undefined)
+  assert.equal(fine.url, 'https://api.test/ok/%F0%9F%98%80')
+  assert.equal(wellFormed('a\u{1F600}b'), 'a\u{1F600}b')
+  assert.equal(wellFormed(String.fromCharCode(0xdc00, 0xd800)), '\ufffd\ufffd')
+})
+
+test('fetch and Python literals escape CR and the Unicode line separators', () => {
+  // Before: a CR inside a single-quoted JS string made the fetch sample a syntax error.
+  const spec = `openapi: 3.0.3
+info: { title: T, version: '1' }
+servers: [{ url: 'https://api.test' }]
+paths:
+  /csv:
+    post:
+      parameters: [{ name: X-Note, in: header, required: true, example: "a\\rb\\u2028c\\u2029d" }]
+      requestBody: { content: { text/csv: { example: "id,name\\r\\n1,Rex\\r\\n" } } }
+      responses: { '200': { description: ok } }
+  /form:
+    post:
+      requestBody: { content: { application/x-www-form-urlencoded: { example: { note: "line1\\r\\nline2" } } } }
+      responses: { '200': { description: ok } }
+  /multi:
+    post:
+      requestBody: { content: { multipart/form-data: { schema: { type: object, properties: { note: { type: string, example: "line1\\r\\nline2" } } } } } }
+      responses: { '200': { description: ok } }
+`
+  for (const route of ['/csv', '/form', '/multi']) {
+    const request = one(spec, route)
+    for (const language of ['fetch', 'python'] as const) {
+      const sample = renderSample(language, request)
+      assert.ok(!/[\r\u2028\u2029]/.test(sample), `${language} ${route}: a raw line terminator`)
+      if (language === 'fetch') {
+        // No single-quoted literal runs over a line break.
+        for (const line of sample.split('\n')) assert.equal((line.replace(/\\./g, '').match(/'/g) ?? []).length % 2, 0, line)
+      }
+    }
+  }
+  const csv = one(spec, '/csv')
+  assert.match(renderSample('fetch', csv), /body: 'id,name\\r\\n1,Rex\\r\\n',/)
+  assert.match(renderSample('fetch', csv), /'X-Note': 'a\\rb\\u2028c\\u2029d',/)
+  assert.match(renderSample('python', csv), /data="id,name\\r\\n1,Rex\\r\\n"/)
+  assert.match(renderSample('python', csv), /"X-Note": "a\\rb\\u2028c\\u2029d"/)
+})
+
+test('curl sends braces and brackets as they are, and unfilled templates are placeholders', () => {
+  // Before: curl expanded [1-3] into three requests and {petId} into "petId".
+  const spec = `openapi: 3.0.3
+info: { title: T, version: '1' }
+servers:
+  - url: 'http://127.0.0.1:9/{region}/v1/[1-3]'
+    variables: { region: { enum: [eu] } }
+paths:
+  /pets/{petId}:
+    get: { responses: { '200': { description: ok } } }
+  /items[0]/{id}:
+    get:
+      parameters: [{ name: id, in: path, required: true, content: { application/json: { schema: { type: string } } } }]
+      responses: { '200': { description: ok } }
+`
+  const pets = one(spec, '/pets/{petId}')
+  assert.equal(pets.url, 'http://127.0.0.1:9/<region>/v1/[1-3]/pets/<petId>')
+  assert.deepEqual(pets.placeholders, ['<region>', '<petId>'])
+  assert.match(renderSample('curl', pets), /^curl -g 'http:\/\/127\.0\.0\.1:9\/<region>\/v1\/\[1-3\]\/pets\/<petId>'$/)
+  const items = one(spec, '/items[0]/{id}')
+  assert.equal(items.url, 'http://127.0.0.1:9/<region>/v1/[1-3]/items[0]/<id>')
+  for (const { request } of requests(spec)) for (const language of ['curl', 'httpie'] as const) assertSends(language, request)
+  const plain = one(FILE_LIKE, '/raw')
+  assert.equal(plain.placeholders, undefined)
+  assert.ok(!renderSample('curl', plain).includes(' -g'), 'no -g when the URL has nothing to expand')
+})
+
+test('samples write arrays and objects as each parameter style says', () => {
+  // Before: every array was joined with commas and every object sent as JSON, whatever the style.
+  const spec = `openapi: 3.1.0
+info: { title: T, version: '1' }
+servers: [{ url: 'https://api.test' }]
+paths:
+  /pets/{ids}:
+    get:
+      parameters:
+        - { name: ids, in: path, required: true, style: matrix, explode: true, example: [1, 2] }
+        - { name: tag, in: query, required: true, example: [cat, dog] }
+        - { name: size, in: query, required: true, explode: false, example: [S, M] }
+        - { name: near, in: query, required: true, style: spaceDelimited, example: [1.5, 2.5] }
+        - { name: by, in: query, required: true, style: pipeDelimited, example: [name, age] }
+        - { name: filter, in: query, required: true, style: deepObject, example: { status: sold, color: red } }
+        - { name: page, in: query, required: true, schema: { type: object, example: { from: 1, to: 9 } } }
+        - { name: X-Range, in: header, required: true, explode: true, example: { from: 1, to: 9 } }
+        - { name: seen, in: cookie, required: true, example: [a, b] }
+      responses: { '200': { description: ok } }
+`
+  const request = one(spec, '/pets/{ids}')
+  assert.equal(request.url, 'https://api.test/pets/;ids=1;ids=2')
+  assert.deepEqual(request.query, [
+    ['tag', 'cat'], ['tag', 'dog'], ['size', 'S,M'], ['near', '1.5 2.5'], ['by', 'name|age'],
+    ['filter[status]', 'sold'], ['filter[color]', 'red'], ['from', '1'], ['to', '9']
+  ])
+  assert.deepEqual(request.headers, [['X-Range', 'from=1,to=9'], ['Cookie', 'seen=a; seen=b']])
+  assert.equal(
+    renderSample('curl', request).split('\n')[0],
+    "curl -g 'https://api.test/pets/;ids=1;ids=2?tag=cat&tag=dog&size=S,M&near=1.5%202.5&by=name%7Cage&filter[status]=sold&filter[color]=red&from=1&to=9' \\"
+  )
+  for (const language of ['curl', 'httpie'] as const) assertSends(language, request)
+  assert.match(renderSample('python', request), /params=\{"tag": \["cat", "dog"\], "size": "S,M", "near": "1\.5 2\.5", "by": "name\|age", "filter\[status\]": "sold", "filter\[color\]": "red", "from": "1", "to": "9"\}/)
+})
+
+test('Swagger 2.0 samples follow collectionFormat, in the query and in forms', () => {
+  const spec = `swagger: '2.0'
+info: { title: T, version: '1' }
+host: api.test
+schemes: [https]
+paths:
+  /find/{ids}:
+    post:
+      consumes: [application/x-www-form-urlencoded]
+      parameters:
+        - { name: ids, in: path, required: true, type: array, items: { type: integer }, collectionFormat: pipes, x-example: [1, 2] }
+        - { name: tag, in: query, required: true, type: array, items: { type: string }, collectionFormat: multi, x-example: [cat, dog] }
+        - { name: size, in: query, required: true, type: array, items: { type: string }, collectionFormat: ssv, x-example: [S, M] }
+        - { name: kind, in: formData, required: true, type: array, items: { type: string }, collectionFormat: multi, x-example: [a, b] }
+        - { name: note, in: formData, required: true, type: string, x-example: hi }
+      responses: { '200': { description: ok } }
+`
+  const request = one(spec, '/find/{ids}')
+  assert.equal(request.url, 'https://api.test/find/1%7C2')
+  assert.deepEqual(request.query, [['tag', 'cat'], ['tag', 'dog'], ['size', 'S M']])
+  assert.deepEqual(request.body!.form!.map((f) => [f.name, f.value]), [['kind', 'a'], ['kind', 'b'], ['note', 'hi']])
+  for (const language of ['curl', 'httpie'] as const) assertSends(language, request)
+  const python = renderSample('python', request)
+  assert.match(python, /params=\{"tag": \["cat", "dog"\], "size": "S M"\}/)
+  assert.match(python, /data=\{"kind": \["a", "b"\], "note": "hi"\}/)
+  // An object literal would keep one of the repeated fields; fetch gets the list of pairs.
+  assert.match(renderSample('fetch', request), /body: new URLSearchParams\(\[\n {4}\['kind', 'a'\],\n {4}\['kind', 'b'\],\n {4}\['note', 'hi'\],\n {2}\]\),/)
+})
+
+test('shell samples: no NUL, CR or stray line break, and every URL starts with its scheme', () => {
+  // Coordinator check (same class as a HAR Viewer blocker). A NUL ends a shell argument, a CR can
+  // run a pasted line early, and a line break in a header value would start another header.
+  const spec = `openapi: 3.0.3
+info: { title: Shell, version: '1' }
+servers:
+  - url: '{base}'
+    variables: { base: { default: '-o/tmp/x' } }
+paths:
+  /header:
+    get:
+      parameters:
+        - { name: X-Note, in: header, required: true, schema: { type: string }, example: "one\\ntwo" }
+      responses: { '200': { description: ok } }
+  /text:
+    post:
+      requestBody: { content: { text/plain: { example: "before\\u0000after" } } }
+      responses: { '200': { description: ok } }
+  /form:
+    post:
+      requestBody: { content: { application/x-www-form-urlencoded: { example: { note: "a\\rb" } } } }
+      responses: { '200': { description: ok } }
+  /lines:
+    post:
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string }, example: "a\\u0000b" }
+      requestBody: { content: { application/json: { example: { note: "x\\u0000y", text: "one\\ntwo" } } } }
+      responses: { '200': { description: ok } }
+  /cookie:
+    get:
+      parameters:
+        - { name: sid, in: cookie, required: true, schema: { type: string }, example: notes.txt }
+        - { name: '@notes.txt', in: header, required: true, schema: { type: string }, example: v }
+      responses: { '200': { description: ok } }
+`
+  const all = requests(spec)
+  const get = (route: string) => all.find((r) => r.route === route)!.request
+  for (const route of ['/header', '/text', '/form']) {
+    assert.deepEqual(sampleLanguages(get(route)), ['fetch', 'python'], route)
+    assert.equal(shellSafe(get(route)), false, route)
+  }
+  // Encoded query values and JSON escapes carry anything: HTTPie moves such values to the URL or --raw.
+  assert.deepEqual(sampleLanguages(get('/lines')), ['curl', 'fetch', 'python', 'httpie'])
+  const httpie = renderSample('httpie', get('/lines'))
+  assert.ok(!/[\0\r]/.test(httpie), httpie)
+  assert.match(httpie, /q=a%00b/)
+  assert.match(httpie, /--raw=/)
+  assertSends('curl', get('/lines'))
+  assertSends('httpie', get('/lines'))
+  // fetch shows control characters as escapes.
+  assert.match(renderSample('fetch', get('/text')), /body: 'before\\x00after'/)
+  for (const { request } of all) {
+    // A server URL without a scheme gets the stand-in host, so the URL is never an option.
+    assert.match(request.url, /^https:\/\/api\.example\.com\//)
+    for (const language of sampleLanguages(request)) assert.ok(!/[\0\r]/.test(renderSample(language, request)), `${language} ${request.url}`)
+  }
+  // Cookies go in a Cookie header: curl reads a -b value without `=` as a file.
+  const cookie = renderSample('curl', get('/cookie'))
+  assert.match(cookie, /-H 'Cookie: sid=notes\.txt'/)
+  assert.ok(!/ -b |--cookie/.test(cookie), cookie)
+  assert.ok(!cookie.includes("-H '@"), cookie)
+  // A URL that does not start with its scheme would go behind --url.
+  const bare = renderSample('curl', { ...get('/cookie'), url: '-o/tmp/x', headers: [] })
+  assert.match(bare, /^curl --url -o\/tmp\/x$/)
+  assert.ok(!sampleLanguages({ ...get('/cookie'), url: '-o/tmp/x' }).includes('httpie'))
+})
+
+test('form field names are encoded for curl, so & and = stay in the name', () => {
+  const request = one(`openapi: 3.0.3
+info: { title: T, version: '1' }
+servers: [{ url: 'http://127.0.0.1:9' }]
+paths:
+  /form:
+    post:
+      requestBody: { content: { application/x-www-form-urlencoded: { example: { 'a&b': one, 'c=d': two, 'notes@x': three } } } }
+      responses: { '200': { description: ok } }
+`, '/form')
+  const curl = renderSample('curl', request)
+  assert.match(curl, /--data-urlencode a%26b=one/)
+  assert.match(curl, /--data-urlencode c%3Dd=two/)
+  assert.match(curl, /--data-urlencode notes%40x=three/)
+  assertSends('curl', request)
+  assertSends('httpie', request)
 })

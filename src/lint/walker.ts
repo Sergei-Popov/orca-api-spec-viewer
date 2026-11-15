@@ -14,7 +14,7 @@ export type FieldType =
   | 'integer'
   | 'any'
   | 'schema'
-  | { obj: string; ref?: boolean }
+  | { obj: string; ref?: boolean | number }
   | { map: FieldType; keys?: 'component' }
   | { list: FieldType; min?: number }
   | { oneOf: readonly string[] }
@@ -48,7 +48,21 @@ export interface WalkContext {
   refs: RefOccurrence[]
   /** Schemas to check with the schema rules, with where they are. */
   /** `paramLike`: a Swagger 2.0 parameter or header, whose `required` is a boolean. */
-  schemas: { value: unknown; path: string[]; paramLike?: boolean }[]
+  schemas: { value: unknown; path: string[]; paramLike?: boolean; level?: number }[]
+  /** While a schema is checked: the level of its rules when it is not the document's (see formatLevel). */
+  schemaLevel?: number
+  /**
+   * `required` names missing from `properties`, reported after the walk unless the schema is an
+   * `allOf` part (a mixin that requires what the other parts define).
+   */
+  required?: { schema: object; path: string[]; name: string }[]
+  /** The `allOf` parts seen: the schemas themselves, and the references to others. */
+  allOfParts?: { schemas: Set<object>; refs: { ref: string; at: string[] }[] }
+  /**
+   * Parts no table describes, where a `$ref` still counts as a use of what it names: `x-…`
+   * extensions (such as Redoc's `x-webhooks`) and AsyncAPI bindings.
+   */
+  loose: { value: unknown; path: string[] }[]
   root: Record<string, unknown>
   /** Objects and arrays on the current path: a value that contains itself is walked once. */
   active?: Set<object>
@@ -92,8 +106,13 @@ function actualType(value: unknown): string {
   return typeof value
 }
 
+const BINDINGS = /^(?:bindings|serverBindings|channelBindings|operationBindings|messageBindings)$/
+
 export function visit(value: unknown, type: FieldType, path: string[], ctx: WalkContext): void {
-  if (type === 'any') return
+  if (type === 'any') {
+    if (value !== null && typeof value === 'object' && (BINDINGS.test(path.at(-1) ?? '') || BINDINGS.test(path.at(-2) ?? ''))) ctx.loose.push({ value, path })
+    return
+  }
   if (value !== null && typeof value === 'object' && type !== 'schema') {
     const active = (ctx.active ??= new Set())
     if (active.has(value)) return
@@ -150,7 +169,8 @@ function visitValue(value: unknown, type: FieldType, path: string[], ctx: WalkCo
     }
     return
   }
-  if (type.ref && typeof value.$ref === 'string') {
+  // `ref` is true, or the level from which a Reference Object may stand here.
+  if (type.ref && (type.ref === true || ctx.level >= type.ref) && typeof value.$ref === 'string') {
     ctx.refs.push({ ref: value.$ref, path: [...path, '$ref'] })
     const siblings = Object.keys(value).filter((k) => k !== '$ref' && !k.startsWith('x-'))
     // OpenAPI 3.1+ lets a Reference Object override `summary` and `description`.
@@ -190,7 +210,10 @@ function visitFields(value: Record<string, unknown>, name: string, path: string[
       visit(value[key], type, [...path, key], ctx)
       continue
     }
-    if (key.startsWith('x-') && def.extensions !== false) continue
+    if (key.startsWith('x-') && def.extensions !== false) {
+      if (value[key] !== null && typeof value[key] === 'object') ctx.loose.push({ value: value[key], path: [...path, key] })
+      continue
+    }
     if (def.patterned && (!def.patterned.key || def.patterned.key(key))) {
       visit(value[key], def.patterned.type, [...path, key], ctx)
       continue

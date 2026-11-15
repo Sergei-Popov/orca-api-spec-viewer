@@ -145,3 +145,43 @@ export function sameJson(a: unknown, b: unknown, budget = 100_000): boolean {
   }
   return true
 }
+
+/**
+ * A short key that equal JSON values share (object keys sorted, as sameJson ignores their order;
+ * -0 as 0 and NaN as NaN, as sameJson compares them). Different values may share one too, so it
+ * only narrows the values sameJson has to compare: duplicates are found in one pass.
+ */
+export function jsonKey(value: unknown, max = 200): string {
+  let out = ''
+  const stack: unknown[] = [value]
+  while (stack.length > 0 && out.length < max) {
+    const v = stack.pop()
+    if (typeof v === 'string') out += JSON.stringify(v.length > max ? v.slice(0, max) : v)
+    else if (typeof v === 'number') out += 'n' + String(v)
+    else if (v === null || typeof v !== 'object') out += String(v)
+    else if (Array.isArray(v)) {
+      out += '[' + v.length
+      for (let i = Math.min(v.length, 8) - 1; i >= 0; i--) stack.push(v[i])
+    } else {
+      const keys = Object.keys(v).sort()
+      out += '{' + keys.length + JSON.stringify(keys.slice(0, 8)).slice(0, max)
+      for (let i = Math.min(keys.length, 8) - 1; i >= 0; i--) stack.push((v as Record<string, unknown>)[keys[i]])
+    }
+    out += ','
+  }
+  return out.slice(0, max)
+}
+
+/** The indexes of values equal (as JSON) to an earlier one, found in one pass. */
+export function duplicateIndexes(values: unknown[]): number[] {
+  const buckets = new Map<string, unknown[]>()
+  const out: number[] = []
+  values.forEach((value, index) => {
+    const key = jsonKey(value)
+    const bucket = buckets.get(key)
+    if (!bucket) buckets.set(key, [value])
+    else if (bucket.some((other) => sameJson(other, value))) out.push(index)
+    else bucket.push(value)
+  })
+  return out
+}
