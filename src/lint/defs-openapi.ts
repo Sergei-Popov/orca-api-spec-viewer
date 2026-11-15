@@ -3,6 +3,7 @@
 // reported as not part of that version.
 
 import { isObject, own } from '../spec/pointer'
+import { isHttpToken } from '../spec/token'
 import type { FieldType, ObjectDef, WalkContext } from './walker'
 
 const ref = (obj: string): FieldType => ({ obj, ref: true })
@@ -219,6 +220,9 @@ export function openApi3Defs(): Record<string, ObjectDef> {
           for (const method of Object.keys(extra)) {
             if (['GET', 'PUT', 'POST', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH', 'TRACE', 'QUERY'].includes(method.toUpperCase())) {
               ctx.problems.error('bad-key', [...path, 'additionalOperations', method], { key: method, kind: 'method' })
+            } else if (!isHttpToken(method)) {
+              // RFC 9110: a method is a token. Anything else cannot be sent (or pasted into a shell).
+              ctx.problems.error('bad-key', [...path, 'additionalOperations', method], { key: method, kind: 'method-token' })
             }
           }
         }

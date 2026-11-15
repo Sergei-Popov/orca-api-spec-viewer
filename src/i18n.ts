@@ -195,6 +195,7 @@ const en = {
   codeSamples: 'Code samples',
   samples: { curl: 'curl', fetch: 'JavaScript', python: 'Python', httpie: 'HTTPie' } as Record<string, string>,
   noNetwork: 'Requests are not sent from here: Orca keeps plugin views offline. Copy a sample and run it where you have access.',
+  samplesBadMethod: 'No code samples: “{method}” is not a valid HTTP method name.',
   placeholderHost: 'The document names no server, so the samples use api.example.com.',
   tryItNote: 'There is no “Try it out”: the view has no network.',
 
@@ -361,7 +362,8 @@ const en = {
     path: 'A path must start with “/”: “{key}”.',
     'path-query': 'A path must not contain a query string: “{key}”.',
     status: 'Not an HTTP status code: “{key}”.',
-    method: '“{key}” is a standard method; declare it as a field of the path item.'
+    method: '“{key}” is a standard method; declare it as a field of the path item.',
+    'method-token': '“{key}” is not a valid HTTP method name: use letters, digits and !#$%&\'*+-.^_`|~ only.'
   } as Record<string, string>,
   duplicateEnum: 'The value {value} is listed twice.'
 }
@@ -541,6 +543,7 @@ const ru: Strings = {
   codeSamples: 'Примеры кода',
   samples: { curl: 'curl', fetch: 'JavaScript', python: 'Python', httpie: 'HTTPie' },
   noNetwork: 'Запросы отсюда не отправляются: Orca не даёт представлениям плагинов доступа к сети. Скопируйте пример и выполните его там, где есть доступ.',
+  samplesBadMethod: 'Примеров кода нет: «{method}» — недопустимое имя метода HTTP.',
   placeholderHost: 'В документе не указан сервер, поэтому в примерах — api.example.com.',
   tryItNote: 'Кнопки «Попробовать» нет: у представления нет сети.',
 
@@ -707,7 +710,8 @@ const ru: Strings = {
     path: 'Путь должен начинаться с «/»: «{key}».',
     'path-query': 'В пути не должно быть строки запроса: «{key}».',
     status: 'Это не код состояния HTTP: «{key}».',
-    method: '«{key}» — стандартный метод; объявите его полем элемента пути.'
+    method: '«{key}» — стандартный метод; объявите его полем элемента пути.',
+    'method-token': '«{key}» — недопустимое имя метода HTTP: допустимы только буквы, цифры и !#$%&\'*+-.^_`|~.'
   },
   duplicateEnum: 'Значение {value} указано дважды.'
 }

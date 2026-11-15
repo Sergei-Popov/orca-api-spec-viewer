@@ -8,7 +8,7 @@ import { operationServers, operationSecurity, securitySchemes, type OpenApiModel
 import { compareStatus, examplesOf, mediaList, operationDetails, paramView, type BodyView, type ExampleView, type HeaderView, type LinkView, type MediaView, type OperationDetails, type ParamView, type ResponseView } from '../spec/operation'
 import { getAt, isObject, own, str, toPointer } from '../spec/pointer'
 import type { Loc } from '../spec/refs'
-import { buildRequest, renderSample, SAMPLE_LANGUAGES, type SampleLanguage } from '../spec/samples'
+import { buildRequest, renderSample, sampleLanguages, type SampleLanguage } from '../spec/samples'
 import {
   banner,
   chip,
@@ -526,19 +526,28 @@ function exampleBox(ctx: PageCtx, id: string, title: Child, choices: { value: st
 function samplesBox(ctx: PageCtx, model: OpenApiModel, op: Operation, details: OperationDetails): HTMLElement {
   const request = buildRequest(model, ctx.refs, op, details)
   const box = h('div', { className: 'box' })
+  const available = sampleLanguages(request)
+  if (available.length === 0) {
+    // A method that is not an HTTP token cannot be sent, and would not be safe to paste.
+    box.append(h('div', { className: 'boxhead' }, h('b', null, ctx.t.codeSamples)), h('div', { className: 'note' }, svg(icons.info), h('span', null, format(ctx.t.samplesBadMethod, { method: request.method }))))
+    return box
+  }
   const code = h('div')
   let text = ''
   const draw = (lang: string) => {
-    text = renderSample(lang as SampleLanguage, request)
-    code.replaceChildren(codeBlock(text, lang === 'curl' || lang === 'httpie' ? 'shell' : 'js'))
+    const language = (available.includes(lang as SampleLanguage) ? lang : available[0]) as SampleLanguage
+    text = renderSample(language, request)
+    code.replaceChildren(codeBlock(text, language === 'curl' || language === 'httpie' ? 'shell' : 'js'))
   }
-  const langs = SAMPLE_LANGUAGES.map((l) => ({ value: l, label: ctx.t.samples[l] ?? l }))
+  const langs = available.map((l) => ({ value: l, label: ctx.t.samples[l] ?? l }))
+  const saved = ctx.tab('samples#lang', 'curl')
+  const initial = available.includes(saved as SampleLanguage) ? saved : available[0]
   box.append(
-    h('div', { className: 'boxhead' }, h('b', null, ctx.t.codeSamples), h('span', { className: 'grow' }), tabs(ctx, 'samples#lang', langs, 'curl', draw), copyButton(ctx, () => text, ctx.t.copyCode)),
+    h('div', { className: 'boxhead' }, h('b', null, ctx.t.codeSamples), h('span', { className: 'grow' }), tabs(ctx, 'samples#lang', langs, initial, draw), copyButton(ctx, () => text, ctx.t.copyCode)),
     code,
     h('div', { className: 'note' }, svg(icons.info), h('span', null, ctx.t.noNetwork, request.placeholderHost ? ' ' + ctx.t.placeholderHost : ''))
   )
-  draw(ctx.tab('samples#lang', 'curl'))
+  draw(initial)
   return box
 }
 
