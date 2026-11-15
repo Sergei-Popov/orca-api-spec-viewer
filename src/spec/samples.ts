@@ -33,6 +33,8 @@ export interface SampleRequest {
   basicAuth: boolean
   /** A value had an unpaired UTF-16 surrogate, which the samples show as U+FFFD. */
   replaced?: boolean
+  /** `<name>` placeholders in the URL for templates the document leaves unfilled. */
+  placeholders?: string[]
   body?: {
     mediaType: string
     json?: unknown
@@ -143,7 +145,15 @@ export function buildRequest(model: OpenApiModel, refs: Refs, op: Operation, det
     // curl, requests and HTTPie set the multipart boundary themselves.
     request.headers = request.headers.filter(([name]) => name !== 'Content-Type')
   }
-  request.url = base + path
+  // A template the document leaves unfilled (an undeclared path parameter, one with no example,
+  // a server variable with no default) becomes a <name> placeholder to fill in before running.
+  const placeholders: string[] = []
+  request.url = (base + path).replace(/\{([^{}]*)\}/g, (_, name: string) => {
+    const placeholder = `<${name}>`
+    if (!placeholders.includes(placeholder)) placeholders.push(placeholder)
+    return placeholder
+  })
+  if (placeholders.length > 0) request.placeholders = placeholders
   if ([request.url, request.query, request.headers, request.body].some((v) => illFormed(v))) request.replaced = true
   return request
 }
@@ -324,8 +334,11 @@ function render(language: SampleLanguage, request: SampleRequest): string {
 // starts with `{`, `[`, `"`, a digit or a letter, never with `@`.
 function renderCurl(request: SampleRequest): string {
   const lines: string[] = []
-  const first = request.method === 'GET' ? 'curl' : `curl -X ${shellQuote(request.method)}`
-  lines.push(`${first} ${shellQuote(urlWithQuery(request))}`)
+  const url = urlWithQuery(request)
+  // curl reads {a,b} and [1-3] in a URL as patterns that make several requests; -g sends it as is.
+  const curl = /[{}[\]]/.test(url) ? 'curl -g' : 'curl'
+  const first = request.method === 'GET' ? curl : `${curl} -X ${shellQuote(request.method)}`
+  lines.push(`${first} ${shellQuote(url)}`)
   if (request.basicAuth) lines.push(`-u ${shellQuote('<USERNAME>:<PASSWORD>')}`)
   // `Name;` sends an empty header; `Name: ` with nothing after it would remove the header.
   for (const [name, value] of request.headers) lines.push(`-H ${shellQuote(value === '' ? `${name};` : `${name}: ${value}`)}`)

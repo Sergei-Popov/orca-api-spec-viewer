@@ -559,6 +559,7 @@ function samplesBox(ctx: PageCtx, model: OpenApiModel, op: Operation, details: O
     code,
     h('div', { className: 'note' }, svg(icons.info), h('span', null, ctx.t.noNetwork, request.placeholderHost ? ' ' + ctx.t.placeholderHost : ''))
   )
+  if (request.placeholders) box.append(h('div', { className: 'note' }, svg(icons.info), h('span', null, format(ctx.t.samplesFillIn, { names: request.placeholders.join(', ') }))))
   if (request.replaced) box.append(h('div', { className: 'note' }, svg(icons.info), h('span', null, ctx.t.samplesReplaced)))
   draw(initial)
   return box

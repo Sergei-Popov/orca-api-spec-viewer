@@ -212,6 +212,7 @@ const en = {
   noNetwork: 'Requests are not sent from here: Orca keeps plugin views offline. Copy a sample and run it where you have access.',
   samplesBadMethod: 'No code samples: “{method}” is not a valid HTTP method name.',
   placeholderHost: 'The document names no server, so the samples use api.example.com.',
+  samplesFillIn: 'Replace {names} with real values before you run a sample.',
   samplesReplaced: 'A value here has a broken character (half of a UTF-16 pair); the samples show the replacement character U+FFFD in its place.',
   tryItNote: 'There is no “Try it out”: the view has no network.',
 
@@ -581,6 +582,7 @@ const ru: Strings = {
   noNetwork: 'Запросы отсюда не отправляются: Orca не даёт представлениям плагинов доступа к сети. Скопируйте пример и выполните его там, где есть доступ.',
   samplesBadMethod: 'Примеров кода нет: «{method}» — недопустимое имя метода HTTP.',
   placeholderHost: 'В документе не указан сервер, поэтому в примерах — api.example.com.',
+  samplesFillIn: 'Перед запуском замените {names} настоящими значениями.',
   samplesReplaced: 'В значении есть испорченный символ (половина пары UTF-16); в примерах вместо него стоит символ замены U+FFFD.',
   tryItNote: 'Кнопки «Попробовать» нет: у представления нет сети.',
 

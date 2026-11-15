@@ -133,10 +133,15 @@ function curlSends(sample: string): Sent {
   assert.equal(argv[0], 'curl')
   const sent: Sent = { method: 'GET', url: '', headers: [], query: [], fields: [], files: [] }
   const urls: string[] = []
+  let globoff = false
   for (let i = 1; i < argv.length; i++) {
     const word = argv[i]
     if (!word.startsWith('-')) {
       urls.push(word)
+      continue
+    }
+    if (word === '-g') {
+      globoff = true
       continue
     }
     const arg = argv[++i]
@@ -182,6 +187,8 @@ function curlSends(sample: string): Sent {
   }
   assert.equal(urls.length, 1, `one URL in ${sample}`)
   sent.url = urls[0]
+  // curl would expand {a,b} and [1-3] into several requests without -g.
+  assert.equal(globoff, /[{}[\]]/.test(sent.url), `-g exactly when the URL has braces or brackets: ${sample}`)
   sent.query = queryOf(sent.url)
   return sent
 }
@@ -523,4 +530,31 @@ paths:
   assert.match(renderSample('fetch', csv), /'X-Note': 'a\\rb\\u2028c\\u2029d',/)
   assert.match(renderSample('python', csv), /data="id,name\\r\\n1,Rex\\r\\n"/)
   assert.match(renderSample('python', csv), /"X-Note": "a\\rb\\u2028c\\u2029d"/)
+})
+
+test('curl sends braces and brackets as they are, and unfilled templates are placeholders', () => {
+  // Before: curl expanded [1-3] into three requests and {petId} into "petId".
+  const spec = `openapi: 3.0.3
+info: { title: T, version: '1' }
+servers:
+  - url: 'http://127.0.0.1:9/{region}/v1/[1-3]'
+    variables: { region: { enum: [eu] } }
+paths:
+  /pets/{petId}:
+    get: { responses: { '200': { description: ok } } }
+  /items[0]/{id}:
+    get:
+      parameters: [{ name: id, in: path, required: true, content: { application/json: { schema: { type: string } } } }]
+      responses: { '200': { description: ok } }
+`
+  const pets = one(spec, '/pets/{petId}')
+  assert.equal(pets.url, 'http://127.0.0.1:9/<region>/v1/[1-3]/pets/<petId>')
+  assert.deepEqual(pets.placeholders, ['<region>', '<petId>'])
+  assert.match(renderSample('curl', pets), /^curl -g 'http:\/\/127\.0\.0\.1:9\/<region>\/v1\/\[1-3\]\/pets\/<petId>'$/)
+  const items = one(spec, '/items[0]/{id}')
+  assert.equal(items.url, 'http://127.0.0.1:9/<region>/v1/[1-3]/items[0]/<id>')
+  for (const { request } of requests(spec)) for (const language of ['curl', 'httpie'] as const) assertSends(language, request)
+  const plain = one(FILE_LIKE, '/raw')
+  assert.equal(plain.placeholders, undefined)
+  assert.ok(!renderSample('curl', plain).includes(' -g'), 'no -g when the URL has nothing to expand')
 })
