@@ -204,7 +204,7 @@ export function asyncApi3Defs(): Record<string, ObjectDef> {
         title: 'string',
         summary: 'string',
         variables: map(ref('ServerVariable')),
-        security: list('any'),
+        security: list(ref('SecurityScheme')),
         bindings: 'any',
         ...tagged
       },
@@ -241,7 +241,7 @@ export function asyncApi3Defs(): Record<string, ObjectDef> {
         title: 'string',
         summary: 'string',
         description: 'string',
-        security: list('any'),
+        security: list(ref('SecurityScheme')),
         bindings: 'any',
         traits: list(ref('OperationTrait')),
         messages: list(ref('Message')),
@@ -250,7 +250,9 @@ export function asyncApi3Defs(): Record<string, ObjectDef> {
       },
       required: ['action', 'channel']
     },
-    OperationTrait: { fields: { title: 'string', summary: 'string', description: 'string', security: list('any'), bindings: 'any', ...tagged } },
+    OperationTrait: { fields: { title: 'string', summary: 'string', description: 'string', security: list(ref('SecurityScheme')), bindings: 'any', ...tagged } },
+    // An inline scheme is not checked here; a reference to one is, and counts as its use.
+    SecurityScheme: { fields: {}, patterned: { type: 'any' } },
     Reply: { fields: { address: ref('ReplyAddress'), channel: ref('Channel'), messages: list(ref('Message')) } },
     ReplyAddress: { fields: { description: 'string', location: 'string' }, required: ['location'] },
     Message: {

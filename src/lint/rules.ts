@@ -63,6 +63,44 @@ export function checkRefs(ctx: WalkContext, refs: Refs): Usages {
   return used
 }
 
+/**
+ * Security requirements name their schemes instead of referring to them (OpenAPI, AsyncAPI 2.x):
+ * each name is a use of its scheme, for "Used by". AsyncAPI 3.x lists `$ref`s, counted above.
+ */
+export function addSecurityUses(used: Usages, refs: Refs, model: { kind: 'openapi'; model: OpenApiModel } | { kind: 'asyncapi'; model: AsyncApiModel }): void {
+  const use = (pointer: string, from: Path) => {
+    const list = used.get(pointer)
+    if (list) list.push(from)
+    else used.set(pointer, [from])
+  }
+  const requirements = (list: unknown, base: Path, scheme: (name: string) => Path | null) => {
+    if (!Array.isArray(list)) return
+    list.forEach((req, index) => {
+      if (!isObject(req) || refOf(req)) return
+      for (const name of Object.keys(req)) {
+        const path = scheme(name)
+        if (path) use(toPointer(path), [...base, String(index), name])
+      }
+    })
+  }
+  if (model.kind === 'openapi') {
+    const m = model.model
+    const scheme = (name: string) => {
+      const found = requirementScheme(m, refs, name)
+      return found.kind === 'local' && found.loc.doc === '' ? found.loc.path.slice() : null
+    }
+    requirements(own(m.root, 'security'), ['security'], scheme)
+    for (const op of [...m.operations, ...m.webhooks]) requirements(own(op.op, 'security'), [...op.loc.path, 'security'], scheme)
+    return
+  }
+  const m = model.model
+  if (m.family !== 'asyncapi2') return
+  const schemes = getAt(m.root, ['components', 'securitySchemes'])
+  const scheme = (name: string) => (isObject(schemes) && Object.prototype.hasOwnProperty.call(schemes, name) ? ['components', 'securitySchemes', name] : null)
+  for (const server of m.servers) if (server.loc.doc === '') requirements(own(server.value, 'security'), [...server.loc.path, 'security'], scheme)
+  for (const op of m.operations) if (op.loc.doc === '') requirements(own(op.op, 'security'), [...op.loc.path, 'security'], scheme)
+}
+
 /** Keys whose values are data, never references. */
 const DATA_KEYS = new Set(['example', 'default', 'enum', 'const'])
 

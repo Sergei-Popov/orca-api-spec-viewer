@@ -395,6 +395,55 @@ components:
   assert.deepEqual(a.problems.map((p) => p.rule), [])
 })
 
+test('security requirements count as uses of their schemes', () => {
+  // Before: every scheme page said "Nothing in this document refers to it", though servers and
+  // operations named it (by name in OpenAPI and AsyncAPI 2, by $ref in AsyncAPI 3).
+  const uses = (text: string) => {
+    const a = analyze(text)
+    return Object.fromEntries([...a.usages].filter(([k]) => k.includes('securitySchemes')).map(([k, v]) => [k.split('/').pop(), v.map((p) => p.join('/'))]))
+  }
+  assert.deepEqual(
+    uses(`openapi: 3.1.0
+info: { title: T, version: '1' }
+security: [{ bearer: [] }]
+paths:
+  /a: { get: { security: [{ key: [] }], responses: { '200': { description: ok } } } }
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer }
+    key: { type: apiKey, in: header, name: X-Key }
+`),
+    { bearer: ['security/0/bearer'], key: ['paths//a/get/security/0/key'] }
+  )
+  assert.deepEqual(
+    uses(`asyncapi: 2.6.0
+info: { title: T, version: '1' }
+servers: { prod: { url: example.com, protocol: mqtt, security: [{ apiKey: [] }] } }
+channels:
+  a: { publish: { operationId: pub, security: [{ oauth: [write] }], message: { payload: { type: string } } } }
+components:
+  securitySchemes:
+    apiKey: { type: apiKey, in: user }
+    oauth: { type: oauth2, flows: { clientCredentials: { tokenUrl: 'https://example.com/t', availableScopes: { write: w } } } }
+`),
+    { apiKey: ['servers/prod/security/0/apiKey'], oauth: ['channels/a/publish/security/0/oauth'] }
+  )
+  const v3 = `asyncapi: 3.0.0
+info: { title: T, version: '1' }
+servers: { prod: { host: example.com, protocol: mqtt, security: [{ $ref: '#/components/securitySchemes/apiKey' }] } }
+channels: { a: { address: a, messages: { m: { payload: { type: string } } } } }
+operations:
+  send: { action: send, channel: { $ref: '#/channels/a' }, security: [{ $ref: '#/components/securitySchemes/oidc' }, { $ref: '#/components/securitySchemes/gone' }] }
+components:
+  securitySchemes:
+    apiKey: { type: apiKey, in: user }
+    oidc: { type: openIdConnect, openIdConnectUrl: 'https://example.com/.well-known' }
+`
+  assert.deepEqual(uses(v3), { apiKey: ['servers/prod/security/0/$ref'], oidc: ['operations/send/security/0/$ref'] })
+  // And a reference to a scheme that is not there is now reported.
+  assert.deepEqual(found(v3), ['unresolved-ref operations/send/security/1/$ref'])
+})
+
 test('AsyncAPI traits are merged into messages and operations', () => {
   // Before: every streetlights message lacked the commonHeaders trait's headers, and operation
   // trait bindings were not shown.

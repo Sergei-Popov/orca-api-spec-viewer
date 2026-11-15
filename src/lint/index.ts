@@ -9,7 +9,7 @@ import type { Refs } from '../spec/refs'
 import { arazzoDefs, asyncApi2Defs, asyncApi3Defs, overlayDefs } from './defs-async'
 import { openApi3Defs, swagger2Defs } from './defs-openapi'
 import { ProblemList } from './problem'
-import { asyncComponentSections, checkArazzo, checkAsyncApi, checkOpenApi, checkRefs, checkUnused, openApiComponentSections, type Usages } from './rules'
+import { addSecurityUses, asyncComponentSections, checkArazzo, checkAsyncApi, checkOpenApi, checkRefs, checkUnused, openApiComponentSections, type Usages } from './rules'
 import { checkSchemas, reportRequired } from './schema-rules'
 import { levelOf, visitObject, type ObjectDef, type WalkContext } from './walker'
 
@@ -57,6 +57,7 @@ export function lintDocument(root: Record<string, unknown>, family: Family, refs
     return resolution.kind === 'local' ? refs.follow(resolution.value, resolution.loc).value : undefined
   })
   const used = checkRefs(ctx, refs)
+  if (lintModel.kind === 'openapi' || lintModel.kind === 'asyncapi') addSecurityUses(used, refs, lintModel)
   if (lintModel.kind === 'openapi') {
     checkOpenApi(ctx, refs, lintModel.model)
     if (lintModel.model.operations.length + lintModel.model.webhooks.length > 0) checkUnused(ctx, used, openApiComponentSections(lintModel.model))
