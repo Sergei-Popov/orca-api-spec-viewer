@@ -49,6 +49,11 @@ export interface WalkContext {
   /** Schemas to check with the schema rules, with where they are. */
   /** `paramLike`: a Swagger 2.0 parameter or header, whose `required` is a boolean. */
   schemas: { value: unknown; path: string[]; paramLike?: boolean }[]
+  /**
+   * Parts no table describes, where a `$ref` still counts as a use of what it names: `x-…`
+   * extensions (such as Redoc's `x-webhooks`) and AsyncAPI bindings.
+   */
+  loose: { value: unknown; path: string[] }[]
   root: Record<string, unknown>
   /** Objects and arrays on the current path: a value that contains itself is walked once. */
   active?: Set<object>
@@ -92,8 +97,13 @@ function actualType(value: unknown): string {
   return typeof value
 }
 
+const BINDINGS = /^(?:bindings|serverBindings|channelBindings|operationBindings|messageBindings)$/
+
 export function visit(value: unknown, type: FieldType, path: string[], ctx: WalkContext): void {
-  if (type === 'any') return
+  if (type === 'any') {
+    if (value !== null && typeof value === 'object' && (BINDINGS.test(path.at(-1) ?? '') || BINDINGS.test(path.at(-2) ?? ''))) ctx.loose.push({ value, path })
+    return
+  }
   if (value !== null && typeof value === 'object' && type !== 'schema') {
     const active = (ctx.active ??= new Set())
     if (active.has(value)) return
@@ -190,7 +200,10 @@ function visitFields(value: Record<string, unknown>, name: string, path: string[
       visit(value[key], type, [...path, key], ctx)
       continue
     }
-    if (key.startsWith('x-') && def.extensions !== false) continue
+    if (key.startsWith('x-') && def.extensions !== false) {
+      if (value[key] !== null && typeof value[key] === 'object') ctx.loose.push({ value: value[key], path: [...path, key] })
+      continue
+    }
     if (def.patterned && (!def.patterned.key || def.patterned.key(key))) {
       visit(value[key], def.patterned.type, [...path, key], ctx)
       continue

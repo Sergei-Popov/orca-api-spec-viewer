@@ -47,6 +47,7 @@ export function lintDocument(root: Record<string, unknown>, family: Family, refs
     defs: defsFor(family),
     refs: [],
     schemas: [],
+    loose: [],
     root
   }
   visitObject(root, 'Root', [], ctx)

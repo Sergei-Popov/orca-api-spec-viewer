@@ -56,7 +56,65 @@ export function checkRefs(ctx: WalkContext, refs: Refs): Usages {
     else if (state === 'long') ctx.problems.warn('long-ref-chain', occurrence.path, { ref: occurrence.ref, max: MAX_HOPS })
   }
   for (const [file, { count, path }] of external) ctx.problems.info('external-ref', path, { file, count })
+  for (const { from, ref } of looseRefs(ctx.loose)) {
+    const resolution = refs.resolve(ref, '', false, from.slice(0, -1))
+    if (resolution.kind === 'local' && resolution.loc.doc === '') use(toPointer(resolution.loc.path), from)
+  }
   return used
+}
+
+/** Keys whose values are data, never references. */
+const DATA_KEYS = new Set(['example', 'default', 'enum', 'const'])
+
+/**
+ * Data inside a loose part: the keys above, a schema's `examples` list, and an Example Object's
+ * `value`. A media type's `examples` is a map of Example Objects, which may be references.
+ */
+function isData(key: string, value: unknown, objectKey: string, parentKey: string): boolean {
+  // In a map of Example Objects every key is a name (`default` included).
+  if (objectKey === 'examples') return false
+  if (DATA_KEYS.has(key)) return true
+  if (key === 'examples') return Array.isArray(value)
+  return key === 'value' && parentKey === 'examples'
+}
+
+/**
+ * The `$ref`s in parts no table describes. They only count as uses: an extension is free-form,
+ * so one that does not resolve is not reported.
+ */
+function looseRefs(parts: WalkContext['loose']): { ref: string; from: Path }[] {
+  // Each entry links to its parent, so a deep part costs no path copies: a path is built only
+  // for a reference that is found.
+  type Entry = { value: unknown; key: string; parentKey: string; parent: Entry | null; base?: Path }
+  const pathOf = (entry: Entry): Path => {
+    const keys: string[] = []
+    let at: Entry = entry
+    while (at.parent !== null) {
+      keys.push(at.key)
+      at = at.parent
+    }
+    return [...at.base!, ...keys.reverse()]
+  }
+  const out: { ref: string; from: Path }[] = []
+  const seen = new Set<object>()
+  const stack: Entry[] = parts.map((part) => ({ value: part.value, key: part.path.at(-1) ?? '', parentKey: part.path.at(-2) ?? '', parent: null, base: part.path }))
+  let budget = 1_000_000
+  while (stack.length > 0 && budget-- > 0) {
+    const entry = stack.pop()!
+    const value = entry.value
+    if (value === null || typeof value !== 'object' || seen.has(value)) continue
+    seen.add(value)
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => stack.push({ value: item, key: String(index), parentKey: entry.key, parent: entry }))
+      continue
+    }
+    const object = value as Record<string, unknown>
+    if (typeof object.$ref === 'string') out.push({ ref: object.$ref, from: [...pathOf(entry), '$ref'] })
+    for (const key of Object.keys(object)) {
+      if (!isData(key, object[key], entry.key, entry.parentKey)) stack.push({ value: object[key], key, parentKey: entry.key, parent: entry })
+    }
+  }
+  return out
 }
 
 /** Components no reference reaches. Skipped for libraries (documents without operations). */

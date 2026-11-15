@@ -141,11 +141,14 @@ export function buildOpenApi(root: Record<string, unknown>, family: Family, refs
       model.operations.push(...entry.operations)
     }
   }
-  const webhooks = own(root, 'webhooks')
-  if (family !== 'swagger2' && family !== 'openapi30' && isObject(webhooks)) {
+  // OpenAPI 3.0 has no webhooks; Redoc's `x-webhooks` (used by GitHub's 3.0 description) has the
+  // shape of 3.1's, so it is shown the same way.
+  const field = family === 'openapi30' ? 'x-webhooks' : 'webhooks'
+  const webhooks = own(root, field)
+  if (family !== 'swagger2' && isObject(webhooks)) {
     for (const name of Object.keys(webhooks)) {
       if (name.startsWith('x-')) continue
-      const entry = pathEntry(refs, webhooks[name], { doc: '', path: ['webhooks', name] }, name, 'webhook', methods, family)
+      const entry = pathEntry(refs, webhooks[name], { doc: '', path: [field, name] }, name, 'webhook', methods, family)
       model.webhooks.push(...entry.operations)
     }
   }
