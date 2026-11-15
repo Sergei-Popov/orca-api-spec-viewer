@@ -6,7 +6,7 @@ import { format, type Strings } from '../i18n'
 import { renderMarkdown, type MarkdownHost } from '../markdown/render'
 import { prettyJson } from '../spec/example'
 import { isObject, own, str, toPointer } from '../spec/pointer'
-import { splitRef, type Loc, type Refs, type Resolution } from '../spec/refs'
+import { MAX_HOPS, splitRef, type Loc, type Refs, type Resolution } from '../spec/refs'
 import { refName } from '../spec/schema'
 import { append, button, clickable, h, svg, type Child } from './dom'
 import { icons } from './icons'
@@ -227,6 +227,7 @@ export function stopNote(ctx: PageCtx, stop: Exclude<Resolution, { kind: 'local'
       )
     )
   }
+  if (stop.reason === 'too-long') return banner('warning', format(ctx.t.refChainTooLong, { max: MAX_HOPS }), ' · ', h('span', { className: 'mono' }, stop.ref))
   return banner('error', h('b', null, ctx.t.missingRef), ' · ', h('span', { className: 'mono' }, stop.ref))
 }
 

@@ -26,6 +26,7 @@ export type RuleCode =
   | 'unresolved-ref'
   | 'external-ref'
   | 'circular-ref'
+  | 'long-ref-chain'
   | 'ref-siblings'
   // OpenAPI semantics
   | 'duplicate-operation-id'

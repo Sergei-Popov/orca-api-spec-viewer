@@ -5,7 +5,7 @@ import type { ArazzoModel } from '../spec/arazzo'
 import type { AsyncApiModel } from '../spec/asyncapi'
 import { componentsPath, pathTemplateNames, serverList, type OpenApiModel, type Operation } from '../spec/openapi'
 import { getAt, isObject, own, str, toPointer } from '../spec/pointer'
-import { refOf, type Refs } from '../spec/refs'
+import { locKey, MAX_HOPS, refOf, type Refs } from '../spec/refs'
 import type { WalkContext } from './walker'
 
 type Path = string[]
@@ -22,7 +22,7 @@ export function checkRefs(ctx: WalkContext, refs: Refs): Usages {
     else used.set(pointer, [from])
   }
   const external = new Map<string, { count: number; path: Path }>()
-  const cache = new Map<string, 'ok' | 'missing' | 'cycle' | 'external'>()
+  const cache = new Map<string, 'ok' | 'cycle' | 'long'>()
   const schemaBase = ctx.family === 'swagger2' ? ['definitions'] : ['components', 'schemas']
   for (const occurrence of ctx.refs) {
     if (occurrence.mappingName) {
@@ -32,8 +32,8 @@ export function checkRefs(ctx: WalkContext, refs: Refs): Usages {
       else use(toPointer([...schemaBase, occurrence.ref]), occurrence.path)
       continue
     }
-    const known = cache.get(occurrence.ref + (occurrence.dynamic ? ' dyn' : ''))
-    const resolution = refs.resolve(occurrence.ref, '', occurrence.dynamic)
+    // The object that holds the reference: inside a `$id` resource, it resolves against that.
+    const resolution = refs.resolve(occurrence.ref, '', occurrence.dynamic, occurrence.path.slice(0, -1))
     if (resolution.kind === 'external') {
       const entry = external.get(resolution.file)
       if (entry) entry.count++
@@ -45,13 +45,15 @@ export function checkRefs(ctx: WalkContext, refs: Refs): Usages {
       continue
     }
     if (resolution.loc.doc === '') use(toPointer(resolution.loc.path), occurrence.path)
-    let state = known
+    const key = locKey(resolution.loc)
+    let state = cache.get(key)
     if (!state) {
       const followed = refs.follow(resolution.value, resolution.loc)
-      state = followed.cycle ? 'cycle' : 'ok'
-      cache.set(occurrence.ref + (occurrence.dynamic ? ' dyn' : ''), state)
+      state = followed.cycle ? 'cycle' : followed.stop?.kind === 'missing' && followed.stop.reason === 'too-long' ? 'long' : 'ok'
+      cache.set(key, state)
     }
     if (state === 'cycle') ctx.problems.error('circular-ref', occurrence.path, { ref: occurrence.ref })
+    else if (state === 'long') ctx.problems.warn('long-ref-chain', occurrence.path, { ref: occurrence.ref, max: MAX_HOPS })
   }
   for (const [file, { count, path }] of external) ctx.problems.info('external-ref', path, { file, count })
   return used

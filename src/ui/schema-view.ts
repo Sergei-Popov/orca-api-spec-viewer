@@ -253,7 +253,7 @@ function detailsOf(build: Build, schema: Record<string, unknown>, loc: Loc, opti
         const target = mapping[value]
         if (typeof target !== 'string') continue
         const ref = /[#/]/.test(target) ? target : `#/components/schemas/${target}`
-        const res = ctx.refs.resolve(ref, loc.doc)
+        const res = ctx.refs.resolve(ref, loc.doc, false, loc.path)
         row.push(h('span', null, h('code', null, value), ' → ', res.kind === 'local' ? refLink(ctx, ref, res.loc) : h('span', { className: 'mono' }, target)))
       }
     }
