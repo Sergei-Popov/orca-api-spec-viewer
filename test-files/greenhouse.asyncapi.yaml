@@ -1,0 +1,151 @@
+asyncapi: 3.0.0
+info:
+  title: Greenhouse Sensors
+  version: 1.3.0
+  description: |
+    Temperature, humidity and light readings from greenhouse sensors, and commands to the vents.
+
+    Readings arrive every 30 seconds; a sensor that misses three readings is reported as **offline**.
+defaultContentType: application/json
+servers:
+  broker:
+    host: mqtt.greenhouse.example:8883
+    protocol: mqtts
+    description: Broker for every greenhouse on the site.
+    security:
+      - $ref: '#/components/securitySchemes/clientCert'
+channels:
+  readings:
+    address: greenhouse/{houseId}/sensors/{sensorId}/readings
+    description: Readings of one sensor.
+    parameters:
+      houseId:
+        $ref: '#/components/parameters/houseId'
+      sensorId:
+        description: Sensor id printed on its case.
+    messages:
+      reading:
+        $ref: '#/components/messages/Reading'
+  vents:
+    address: greenhouse/{houseId}/vents/set
+    parameters:
+      houseId:
+        $ref: '#/components/parameters/houseId'
+    messages:
+      ventCommand:
+        $ref: '#/components/messages/VentCommand'
+  alerts:
+    address: greenhouse/alerts
+    messages:
+      alert:
+        $ref: '#/components/messages/Alert'
+operations:
+  receiveReadings:
+    action: receive
+    channel:
+      $ref: '#/channels/readings'
+    title: Receive sensor readings
+    summary: Readings of every sensor in a greenhouse.
+    tags:
+      - name: sensors
+    messages:
+      - $ref: '#/channels/readings/messages/reading'
+  setVents:
+    action: send
+    channel:
+      $ref: '#/channels/vents'
+    title: Open or close the vents
+    tags:
+      - name: climate
+    messages:
+      - $ref: '#/channels/vents/messages/ventCommand'
+    reply:
+      channel:
+        $ref: '#/channels/alerts'
+      messages:
+        - $ref: '#/channels/alerts/messages/alert'
+  receiveAlerts:
+    action: receive
+    channel:
+      $ref: '#/channels/alerts'
+    title: Receive alerts
+    tags:
+      - name: climate
+components:
+  parameters:
+    houseId:
+      description: Greenhouse number.
+      enum: ['1', '2', '3']
+      default: '1'
+  messages:
+    Reading:
+      name: reading
+      title: Sensor reading
+      summary: One reading of temperature, humidity and light.
+      payload:
+        $ref: '#/components/schemas/Reading'
+      headers:
+        type: object
+        properties:
+          firmware:
+            type: string
+            examples: ['4.2.1']
+    VentCommand:
+      name: ventCommand
+      title: Vent command
+      payload:
+        type: object
+        required: [opening]
+        properties:
+          opening:
+            type: integer
+            minimum: 0
+            maximum: 100
+            description: How far to open the vents, in percent.
+          reason:
+            type: string
+            enum: [schedule, temperature, manual]
+    Alert:
+      name: alert
+      title: Alert
+      payload:
+        type: object
+        properties:
+          level:
+            type: string
+            enum: [info, warning, critical]
+          message:
+            type: string
+          at:
+            type: string
+            format: date-time
+  schemas:
+    Reading:
+      type: object
+      required: [sensorId, at]
+      properties:
+        sensorId:
+          type: string
+        at:
+          type: string
+          format: date-time
+        temperature:
+          type: number
+          description: Degrees Celsius.
+          minimum: -40
+          maximum: 85
+        humidity:
+          type: number
+          minimum: 0
+          maximum: 100
+        lux:
+          type: integer
+          minimum: 0
+        battery:
+          type: number
+          minimum: 0
+          maximum: 1
+  securitySchemes:
+    clientCert:
+      type: X509
+      description: Each sensor has its own client certificate.

@@ -418,6 +418,11 @@ function decodeEntity(m: RegExpExecArray): string | null {
 }
 
 /** GFM: a bare link drops trailing punctuation and an unbalanced closing parenthesis. */
+/** Drops the backslash before escaped ASCII punctuation, as in a link destination. */
+function unescapePunctuation(text: string): string {
+  return text.replace(/\\([!-/:-@[-`{-~])/g, (_whole, char: string) => char)
+}
+
 function trimUrl(url: string): string {
   let end = url.length
   for (;;) {
@@ -681,7 +686,7 @@ function destination(src: string, start: number): { href: string; title?: string
       }
       i++
     }
-    href = src.slice(from, i).replace(/\\([!-/:-@[-`{-~])/g, '$1')
+    href = unescapePunctuation(src.slice(from, i))
   }
   skip()
   let title: string | undefined
