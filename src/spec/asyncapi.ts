@@ -90,7 +90,7 @@ const SECTIONS = [
 ]
 
 function child(loc: Loc, ...segments: string[]): Loc {
-  return { doc: loc.doc, path: [...loc.path, ...segments] }
+  return { ...loc, path: [...loc.path, ...segments] }
 }
 
 function message(refs: Refs, raw: unknown, at: Loc, name: string): AsyncMessage {

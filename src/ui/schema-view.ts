@@ -36,7 +36,7 @@ function resolve(ctx: PageCtx, raw: unknown, loc: Loc): Resolved {
 }
 
 function child(loc: Loc, ...segments: string[]): Loc {
-  return { doc: loc.doc, path: [...loc.path, ...segments] }
+  return { ...loc, path: [...loc.path, ...segments] }
 }
 
 /** A property, pattern, item or variant to draw as one row. */

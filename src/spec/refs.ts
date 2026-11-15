@@ -3,9 +3,12 @@
 // `$dynamicAnchor`) or a schema `$id`. Anything else names another file, which the editor never
 // receives: it is "external" unless the person loaded that file into the viewer by hand.
 // Chains are followed with a hop limit and cycle detection, so recursive schemas stay links.
-// Inside a schema resource (an object with `$id`), references resolve against that resource
-// first, as JSON Schema 2020-12 says, and then against the document root, which many documents
-// expect.
+// URIs are resolved as JSON Schema 2020-12 says: the document's base is OpenAPI 3.2's `$self`
+// (or a placeholder), each `$id` is resolved against the resource around it, and an anchor
+// belongs to its resource. A reference inside a resource resolves against that resource first,
+// then (for pointers) against the document root, which many documents expect; a `$id` written
+// the same way elsewhere is the last resort. A `$dynamicRef` takes the outermost resource of its
+// dynamic scope (carried in `Loc.scope`) that has the anchor.
 
 import { fragmentToPath, getAt, isObject, toPointer } from './pointer'
 
@@ -13,7 +16,15 @@ import { fragmentToPath, getAt, isObject, toPointer } from './pointer'
 export interface Loc {
   doc: string
   path: readonly string[]
+  /**
+   * The schema resources entered on the way here (their URIs, outermost first): the dynamic scope
+   * a `$dynamicRef` resolves in. Set only in documents with `$dynamicAnchor`s.
+   */
+  scope?: readonly string[]
 }
+
+/** The base URI of a document that gives none of its own. */
+export const PLACEHOLDER_BASE = 'https://document.invalid/'
 
 export type Resolution =
   | { kind: 'local'; loc: Loc; value: unknown }
@@ -59,11 +70,19 @@ export function fileBaseName(file: string): string {
 }
 
 interface DocIndex {
+  /** The document's URI: OpenAPI 3.2's `$self`, or PLACEHOLDER_BASE. */
+  base: string
+  /** Schema resources by absolute URI. */
   ids: Map<string, string[]>
+  /** `$id`s as written, for a reference that matches one only by its text. */
+  rawIds: Map<string, string[]>
+  /** `$anchor`s by `resource URI#name`, and by name alone (the first one) as a last resort. */
   anchors: Map<string, string[]>
+  anchorNames: Map<string, string[]>
   dynamicAnchors: Map<string, string[]>
-  /** Schema resources by the pointer of their object: its path and absolute base URI. */
-  resources: Map<string, { path: string[]; base: string | null }>
+  dynamicAnchorNames: Map<string, string[]>
+  /** Schema resources by the pointer of their object: its path and absolute URI ('' is the document). */
+  resources: Map<string, { path: string[]; base: string }>
 }
 
 export class Refs {
@@ -112,25 +131,55 @@ export class Refs {
     return getAt(this.docs.get(loc.doc), loc.path)
   }
 
-  /** `at`: where the reference is (the object that holds it), for the enclosing `$id`. */
-  resolve(ref: string, from = '', dynamic = false, at?: readonly string[]): Resolution {
+  /**
+   * `at`: where the reference is (the object that holds it), for the enclosing `$id`.
+   * `scope`: for a `$dynamicRef`, the resources entered on the way (see Loc.scope).
+   */
+  resolve(ref: string, from = '', dynamic = false, at?: readonly string[], scope?: readonly string[]): Resolution {
     if (typeof ref !== 'string') return { kind: 'missing', ref: String(ref), reason: 'bad-ref' }
+    const found = this.resolveStatic(ref, from, at)
+    // A $dynamicRef whose static target has that $dynamicAnchor takes the outermost resource of
+    // the dynamic scope with the same anchor (JSON Schema 2020-12 §8.2.3.2).
+    if (dynamic && scope && found.kind === 'local' && isObject(found.value)) {
+      const name = typeof found.value.$dynamicAnchor === 'string' ? found.value.$dynamicAnchor : undefined
+      if (name !== undefined && `#${name}` === splitRef(ref.trim()).fragment) {
+        const index = this.index(found.loc.doc)
+        for (const base of scope) {
+          const path = index.dynamicAnchors.get(`${base}#${name}`)
+          if (path) return { kind: 'local', loc: { doc: found.loc.doc, path }, value: getAt(this.docs.get(found.loc.doc), path) }
+        }
+      }
+    }
+    return found
+  }
+
+  private resolveStatic(ref: string, from: string, at?: readonly string[]): Resolution {
     const { file, fragment } = splitRef(ref.trim())
-    const resource = at && this.docs.has(from) ? this.resourceOf(from, at) : null
+    const index = this.index(from)
+    const resource = this.resourceOf(from, at ?? [])
     let doc: string | null = from
-    let base: readonly string[] = resource?.path ?? []
-    // A fragment-only reference inside a resource is tried there first, then from the root.
-    let fallback = resource !== null && resource.path.length > 0
+    let base: readonly string[] = resource.path
+    let uri = resource.base
+    // A pointer inside a resource is tried there first, then from the root.
+    let fallback = resource.path.length > 0
     if (file !== '') {
       fallback = false
-      base = []
-      const byId = this.findId(from, file) ?? (resource?.base ? this.findId(from, resolveUri(file, resource.base) ?? '') : null)
+      const absolute = resolveUri(file, resource.base)
+      const byId = absolute !== null ? index.ids.get(absolute) : undefined
       if (byId) {
-        doc = from
         base = byId
+        uri = absolute!
+      } else if (absolute !== null && sameDocument(absolute, index.base)) {
+        base = []
+        uri = index.base
+      } else if (index.rawIds.has(file.replace(/#$/, ''))) {
+        base = index.rawIds.get(file.replace(/#$/, ''))!
+        uri = this.resourceOf(from, base).base
       } else {
         const key = fileBaseName(file)
         doc = key && this.docs.has(key) ? key : null
+        base = []
+        if (doc !== null) uri = this.index(doc).base
       }
     }
     if (doc === null) return { kind: 'external', ref, file, fragment }
@@ -148,19 +197,25 @@ export class Refs {
       }
       return { kind: 'missing', ref, reason: 'not-found' }
     }
-    const name = fragment.slice(1)
-    const index = this.index(doc)
-    const found = (dynamic ? index.dynamicAnchors.get(name) ?? index.anchors.get(name) : index.anchors.get(name) ?? index.dynamicAnchors.get(name))
+    // A plain name: an anchor of the target resource (a $dynamicAnchor is one too), or, as a last
+    // resort, the first anchor of that name anywhere.
+    const name = decodeFragment(fragment.slice(1))
+    const target = this.index(doc)
+    const found =
+      target.anchors.get(`${uri}#${name}`) ??
+      target.dynamicAnchors.get(`${uri}#${name}`) ??
+      target.anchorNames.get(name) ??
+      target.dynamicAnchorNames.get(name)
     if (!found) return { kind: 'missing', ref, reason: 'anchor-not-found' }
     const loc = { doc, path: found }
     return { kind: 'local', loc, value: this.get(loc) }
   }
 
-  /** The innermost schema resource (`$id`) that contains `path`, if any. */
-  private resourceOf(doc: string, path: readonly string[]): { path: string[]; base: string | null } | null {
+  /** The innermost schema resource (`$id`) that contains `path`: the document itself if none. */
+  private resourceOf(doc: string, path: readonly string[]): { path: string[]; base: string } {
     const index = this.index(doc)
-    if (index.resources.size === 0) return null
-    let found = index.resources.get('') ?? null
+    let found = index.resources.get('')!
+    if (index.resources.size === 1) return found
     let pointer = ''
     for (const segment of path) {
       pointer += '/' + segment.replace(/~/g, '~0').replace(/\//g, '~1')
@@ -176,20 +231,30 @@ export class Refs {
     const referring: Record<string, unknown>[] = []
     let current = value
     let at = loc
+    // The dynamic scope, kept only where a $dynamicRef could need it.
+    let scope = loc.scope
+    const enter = (place: Loc) => {
+      if (this.index(place.doc).dynamicAnchors.size === 0) return
+      const uri = this.resourceOf(place.doc, place.path).base
+      if (!scope?.includes(uri)) scope = [...(scope ?? []), uri]
+    }
+    enter(loc)
+    const done = (extra: Omit<Followed, 'loc' | 'via'>): Followed => ({ ...extra, loc: scope && scope !== at.scope ? { ...at, scope } : at, via })
     for (let hop = 0; ; hop++) {
       const ref = refOf(current)
-      if (!ref) return { value: this.options.siblings ? this.withSiblings(current, referring, isSchemaPlace(at.path)) : current, loc: at, via }
+      if (!ref) return done({ value: this.options.siblings ? this.withSiblings(current, referring, isSchemaPlace(at.path)) : current })
       referring.push(current as Record<string, unknown>)
       // A long chain is not a cycle: it stops with its own reason.
-      if (hop >= MAX_HOPS) return { value: current, loc: at, via, stop: { kind: 'missing', ref: ref.ref, reason: 'too-long' } }
+      if (hop >= MAX_HOPS) return done({ value: current, stop: { kind: 'missing', ref: ref.ref, reason: 'too-long' } })
       via.push(ref.ref)
-      const resolution = this.resolve(ref.ref, at.doc, ref.dynamic, at.path)
-      if (resolution.kind !== 'local') return { value: current, loc: at, via, stop: resolution }
+      const resolution = this.resolve(ref.ref, at.doc, ref.dynamic, at.path, scope)
+      if (resolution.kind !== 'local') return done({ value: current, stop: resolution })
       const key = locKey(resolution.loc)
-      if (seen.has(key)) return { value: current, loc: at, via, cycle: true }
+      if (seen.has(key)) return done({ value: current, cycle: true })
       seen.add(key)
       current = resolution.value
       at = resolution.loc
+      enter(at)
     }
   }
 
@@ -215,18 +280,18 @@ export class Refs {
     return value
   }
 
-  private findId(doc: string, uri: string): readonly string[] | null {
-    const index = this.index(doc)
-    const found = index.ids.get(uri) ?? index.ids.get(uri.replace(/#$/, ''))
-    return found ? found : null
-  }
-
   private index(doc: string): DocIndex {
     let index = this.indexes.get(doc)
     if (index) return index
-    index = { ids: new Map(), anchors: new Map(), dynamicAnchors: new Map(), resources: new Map() }
+    const root = this.docs.get(doc)
+    // OpenAPI 3.2: `$self` is the document's URI. Other files get one under the placeholder.
+    const self = isObject(root) && typeof root.$self === 'string' ? root.$self : undefined
+    const fallback = doc === '' ? PLACEHOLDER_BASE : new URL(encodeURIComponent(doc), PLACEHOLDER_BASE).href
+    const base = (self !== undefined ? resolveUri(self, fallback) : null) ?? fallback
+    index = { base, ids: new Map(), rawIds: new Map(), anchors: new Map(), anchorNames: new Map(), dynamicAnchors: new Map(), dynamicAnchorNames: new Map(), resources: new Map() }
+    index.resources.set('', { path: [], base })
     this.indexes.set(doc, index)
-    buildIndex(this.docs.get(doc), index)
+    buildIndex(root, index)
     return index
   }
 }
@@ -292,7 +357,9 @@ interface IndexEntry {
   parent: IndexEntry | null
   key: string
   depth: number
-  base: string | null
+  base: string
+  /** The node is a map of names (properties, responses, …), whose keys are never keywords. */
+  names: boolean
 }
 
 /** The path of an index entry, built only for the few nodes that need one. */
@@ -302,13 +369,42 @@ function entryPath(entry: IndexEntry): string[] {
   return path.reverse()
 }
 
+/** Keywords whose values are data: a `$id` in them is text. */
+const DATA_KEYWORDS = new Set(['example', 'examples', 'default', 'enum', 'const'])
+
+/** Fields whose values map names to objects: there `default` or `enum` is a name (a response, a property). */
+const NAME_MAPS = new Set([
+  'properties',
+  'patternProperties',
+  '$defs',
+  'definitions',
+  'dependentSchemas',
+  'schemas',
+  'responses',
+  'parameters',
+  'headers',
+  'requestBodies',
+  'content',
+  'encoding',
+  'callbacks',
+  'pathItems',
+  'mediaTypes',
+  'links',
+  'securitySchemes',
+  'paths',
+  'webhooks',
+  'channels',
+  'messages',
+  'operations'
+])
+
 /**
  * Walks a document once for `$id`, `$anchor` and `$dynamicAnchor`, skipping example data. Entries
  * link to their parent instead of carrying a path, so deep documents stay linear.
  */
 function buildIndex(root: unknown, index: DocIndex): void {
   const seen = new WeakSet<object>()
-  const stack: IndexEntry[] = [{ node: root, parent: null, key: '', depth: 0, base: null }]
+  const stack: IndexEntry[] = [{ node: root, parent: null, key: '', depth: 0, base: index.base, names: false }]
   let steps = 0
   while (stack.length > 0 && steps++ < 2_000_000) {
     const entry = stack.pop()!
@@ -316,33 +412,41 @@ function buildIndex(root: unknown, index: DocIndex): void {
     if (!node || typeof node !== 'object' || seen.has(node) || depth > MAX_INDEX_DEPTH) continue
     seen.add(node)
     if (Array.isArray(node)) {
-      for (let i = node.length - 1; i >= 0; i--) stack.push({ node: node[i], parent: entry, key: String(i), depth: depth + 1, base })
+      for (let i = node.length - 1; i >= 0; i--) stack.push({ node: node[i], parent: entry, key: String(i), depth: depth + 1, base, names: false })
       continue
     }
     const obj = node as Record<string, unknown>
     let nextBase = base
     let path: string[] | null = null
     const pathHere = () => (path ??= entryPath(entry))
-    const id = own(obj, '$id')
-    if (typeof id === 'string' && id !== '') {
-      const clean = id.replace(/#$/, '')
-      if (!index.ids.has(clean)) index.ids.set(clean, pathHere())
-      const absolute = resolveUri(clean, base)
-      if (absolute && !index.ids.has(absolute)) index.ids.set(absolute, pathHere())
-      nextBase = absolute ?? base
-      index.resources.set(toPointer(pathHere()), { path: pathHere(), base: nextBase })
-    }
-    const anchor = own(obj, '$anchor')
-    if (typeof anchor === 'string' && !index.anchors.has(anchor)) index.anchors.set(anchor, pathHere())
-    const dynamicAnchor = own(obj, '$dynamicAnchor')
-    if (typeof dynamicAnchor === 'string' && !index.dynamicAnchors.has(dynamicAnchor)) {
-      index.dynamicAnchors.set(dynamicAnchor, pathHere())
+    if (!entry.names) {
+      const id = own(obj, '$id')
+      if (typeof id === 'string' && id !== '') {
+        const clean = id.replace(/#$/, '')
+        if (!index.rawIds.has(clean)) index.rawIds.set(clean, pathHere())
+        const absolute = resolveUri(clean, base)
+        if (absolute !== null) {
+          if (!index.ids.has(absolute)) index.ids.set(absolute, pathHere())
+          nextBase = absolute
+        }
+        index.resources.set(toPointer(pathHere()), { path: pathHere(), base: nextBase })
+      }
+      const anchor = own(obj, '$anchor')
+      if (typeof anchor === 'string') {
+        if (!index.anchors.has(`${nextBase}#${anchor}`)) index.anchors.set(`${nextBase}#${anchor}`, pathHere())
+        if (!index.anchorNames.has(anchor)) index.anchorNames.set(anchor, pathHere())
+      }
+      const dynamicAnchor = own(obj, '$dynamicAnchor')
+      if (typeof dynamicAnchor === 'string') {
+        if (!index.dynamicAnchors.has(`${nextBase}#${dynamicAnchor}`)) index.dynamicAnchors.set(`${nextBase}#${dynamicAnchor}`, pathHere())
+        if (!index.dynamicAnchorNames.has(dynamicAnchor)) index.dynamicAnchorNames.set(dynamicAnchor, pathHere())
+      }
     }
     const keys = Object.keys(obj)
     for (let i = keys.length - 1; i >= 0; i--) {
       const key = keys[i]
-      if (key === 'example' || key === 'examples' || key === 'default' || key === 'enum' || key === 'const') continue
-      stack.push({ node: obj[key], parent: entry, key, depth: depth + 1, base: nextBase })
+      if (!entry.names && DATA_KEYWORDS.has(key)) continue
+      stack.push({ node: obj[key], parent: entry, key, depth: depth + 1, base: nextBase, names: !entry.names && NAME_MAPS.has(key) })
     }
   }
 }
@@ -351,10 +455,26 @@ function own(obj: Record<string, unknown>, key: string): unknown {
   return Object.prototype.hasOwnProperty.call(obj, key) ? obj[key] : undefined
 }
 
-function resolveUri(uri: string, base: string | null): string | null {
+/** An absolute URI without its fragment, or null when the text is not a URI reference. */
+function resolveUri(uri: string, base: string): string | null {
   try {
-    return base ? new URL(uri, base).href.replace(/#$/, '') : new URL(uri).href.replace(/#$/, '')
+    const url = new URL(uri, base)
+    url.hash = ''
+    return url.href
   } catch {
     return null
+  }
+}
+
+/** Whether a URI names the document itself (its query aside). */
+function sameDocument(uri: string, base: string): boolean {
+  return uri === base || uri.split('?')[0] === base.split('?')[0]
+}
+
+function decodeFragment(text: string): string {
+  try {
+    return decodeURIComponent(text)
+  } catch {
+    return text
   }
 }

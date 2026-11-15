@@ -142,7 +142,7 @@ function located(refs: Refs, value: unknown, loc: Loc): Located {
 }
 
 function child(loc: Loc, ...segments: string[]): Loc {
-  return { doc: loc.doc, path: [...loc.path, ...segments] }
+  return { ...loc, path: [...loc.path, ...segments] }
 }
 
 function stringList(value: unknown): string[] {

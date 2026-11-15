@@ -34,7 +34,7 @@ import { infoHeader, securitySchemeCard, usedBy, variablesTable } from './openap
 import { schemaTree, treeTools } from './schema-view'
 
 function child(loc: Loc, ...segments: string[]): Loc {
-  return { doc: loc.doc, path: [...loc.path, ...segments] }
+  return { ...loc, path: [...loc.path, ...segments] }
 }
 
 function bindingsBox(ctx: PageCtx, value: unknown): HTMLElement | null {
