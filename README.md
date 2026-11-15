@@ -88,7 +88,7 @@ Kubernetes manifest, a `package.json`, a Swagger 1.x file, and so on).
   the first one and says so.
 - English and Russian, following Orca's language; light and dark, following Orca's theme.
 
-## Limits
+## Known limits
 
 - **Size.** Orca sends a custom editor at most about 50 MiB and shows its own notice for larger
   files. Up to that size the viewer works: a 45 MiB OpenAPI JSON with 12,000 pages opens in about
@@ -103,6 +103,23 @@ Kubernetes manifest, a `package.json`, a Swagger 1.x file, and so on).
   session. This is best-effort: the button opens the system file picker; if your Orca blocks it
   (or a drop), external refs stay listed as links.
 - **YAML and JSON messages** come from the parsers and are in English in both languages.
+- **Code samples** never throw and never quietly differ from the document: where a client cannot
+  send something as written, the sample leaves it out and says so under the samples. That
+  covers a body on GET in `fetch` and on HEAD in curl (`-I`), header values outside ASCII in
+  `fetch` and Python `requests`, header names that are not HTTP tokens and values with a line
+  break, a part's own `Content-Type` or headers from the Encoding Object, line breaks in
+  `fetch` multipart text (FormData sends CRLF), a `.` or `..` path value outside curl, a Cookie
+  header in browsers, and multipart names curl or HTTPie cannot write. `deepObject` values
+  nested deeper than OpenAPI defines use the common `name[key][0]=value` form, and a sequence
+  body (`itemSchema`) sends one generated item. OpenAPI 3.0 bodies on GET, HEAD and DELETE are
+  left out, since the specification has consumers ignore them.
+- **`$ref` siblings** (OpenAPI 3.1+): bounds, `enum`, `type`, `required` and `properties` are
+  combined with the target's; for other keywords both have, such as `pattern` or `format`, both
+  apply and the target's is shown.
+- **Schemas that are not JSON Schema** (Avro, Protobuf, RAML…) are shown as their source with
+  their `schemaFormat`, and no example is generated from them. In AsyncAPI 2.x the format belongs
+  to the message, so a component schema used by an Avro message is still drawn as a schema on
+  its own page.
 - Read-only: the viewer never edits the file.
 
 ## Privacy
