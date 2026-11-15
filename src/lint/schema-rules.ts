@@ -118,6 +118,10 @@ function checkOne(schema: Record<string, unknown>, path: string[], ctx: WalkCont
   }
   const dynamicRef = own(schema, '$dynamicRef')
   if (typeof dynamicRef === 'string' && modern) ctx.refs.push({ ref: dynamicRef, path: [...path, '$dynamicRef'], dynamic: true })
+  // A $ref inside an extension (GitHub's x-github, Stripe's x-expansionResources) is a use too.
+  for (const key in schema) {
+    if (key.startsWith('x-') && schema[key] !== null && typeof schema[key] === 'object') ctx.loose.push({ value: schema[key], path: [...path, key] })
+  }
 
   if (old) {
     for (const keyword of MODERN_ONLY) {
