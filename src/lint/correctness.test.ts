@@ -2,7 +2,7 @@
 // viewer: each fixture is the smallest document that showed one.
 import { assert, test } from 'orca/testing'
 import { analyze } from '../analyze'
-import { asyncSecurityItems, messagePayload, replyOf, schemaWithFormat, type AsyncApiModel } from '../spec/asyncapi'
+import { asyncSecurityItems, followedSchemaWithFormat, messagePayload, replyOf, schemaWithFormat, type AsyncApiModel } from '../spec/asyncapi'
 import { exampleFromSchema } from '../spec/example'
 import type { OpenApiModel } from '../spec/openapi'
 import { operationDetails } from '../spec/operation'
@@ -722,4 +722,68 @@ components:
   const json = schemaWithFormat((v3.parsed.value as any).components.schemas.Json, at('Json'))!
   assert.deepEqual([json.source, json.loc.path.at(-1)], [false, 'schema'])
   assert.equal(schemaWithFormat((v3.parsed.value as any).components.schemas.Plain, at('Plain')), undefined)
+})
+
+test('a security requirement on a callback operation counts as a use of its scheme', () => {
+  // Before: a scheme used only by a callback operation said "Nothing in this document refers to it".
+  const a = analyze(`openapi: 3.0.3
+info: { title: T, version: '1' }
+paths:
+  /a:
+    post:
+      callbacks:
+        cb:
+          '{$request.body#/url}':
+            post: { security: [{ cbOnly: [] }], responses: { '200': { description: ok } } }
+        shared: { $ref: '#/components/callbacks/Shared' }
+      responses: { '200': { description: ok } }
+  /b:
+    post:
+      callbacks: { shared: { $ref: '#/components/callbacks/Shared' } }
+      responses: { '200': { description: ok } }
+components:
+  callbacks:
+    Shared:
+      '{$request.body#/hook}':
+        post: { security: [{ sharedKey: [] }], responses: { '200': { description: ok } } }
+  securitySchemes:
+    cbOnly: { type: http, scheme: bearer }
+    sharedKey: { type: apiKey, in: header, name: X-Key }
+`)
+  const uses = (name: string) => a.usages.get(`/components/securitySchemes/${name}`)?.map((p) => p.join('/'))
+  assert.deepEqual(uses('cbOnly'), ['paths//a/post/callbacks/cb/{$request.body#/url}/post/security/0/cbOnly'])
+  assert.deepEqual(uses('sharedKey'), ['components/callbacks/Shared/{$request.body#/hook}/post/security/0/sharedKey'])
+  assert.ok(!a.problems.some((p) => p.rule === 'unused-component'), JSON.stringify(a.problems))
+})
+
+test('AsyncAPI 3: a payload or headers $ref to a Multi Format Schema Object shows its schema and format', () => {
+  // Before: the body showed only the component's name, with no format, source, fields or example.
+  const a = analyze(`asyncapi: 3.0.0
+info: { title: T, version: '1' }
+channels:
+  c:
+    address: c
+    messages:
+      J: { payload: { $ref: '#/components/schemas/JsonMulti' }, headers: { $ref: '#/components/schemas/HdrMulti' } }
+      A: { payload: { $ref: '#/components/schemas/AvroMulti' } }
+      P: { payload: { $ref: '#/components/schemas/Plain' } }
+operations:
+  send: { action: send, channel: { $ref: '#/channels/c' } }
+components:
+  schemas:
+    JsonMulti: { schemaFormat: 'application/schema+json;version=draft-07', schema: { type: object, properties: { a: { type: string }, b: { type: integer } } } }
+    AvroMulti: { schemaFormat: 'application/vnd.apache.avro;version=1.9.0', schema: { type: record, name: R, fields: [] } }
+    HdrMulti: { schemaFormat: 'application/vnd.aai.asyncapi+json;version=3.0.0', schema: { type: object, properties: { h: { type: string } } } }
+    Plain: { type: object, properties: { a: { type: string } } }
+`)
+  const m = (a.model as { model: AsyncApiModel }).model
+  const shown = Object.fromEntries(m.operations[0].messages.map((msg) => [msg.name, messagePayload(msg.value, msg.loc, m.family, a.refs)]))
+  assert.deepEqual([shown.J?.format, shown.J?.source, shown.J?.loc.path], ['application/schema+json;version=draft-07', false, ['components', 'schemas', 'JsonMulti', 'schema']])
+  assert.deepEqual(exampleFromSchema(a.refs, shown.J?.value, shown.J!.loc, { mode: 'response' }), { a: 'string', b: 0 })
+  assert.deepEqual([shown.A?.format, shown.A?.source], ['application/vnd.apache.avro;version=1.9.0', true])
+  // A reference to a plain schema stays the reference, drawn with its name as before.
+  assert.deepEqual([shown.P?.format, shown.P?.loc.path.at(-1)], [undefined, 'payload'])
+  const j = m.operations[0].messages.find((msg) => msg.name === 'J')!
+  const headers = followedSchemaWithFormat(a.refs, j.value.headers, { doc: j.loc.doc, path: [...j.loc.path, 'headers'] })
+  assert.deepEqual([headers?.format, headers?.loc.path], ['application/vnd.aai.asyncapi+json;version=3.0.0', ['components', 'schemas', 'HdrMulti', 'schema']])
 })

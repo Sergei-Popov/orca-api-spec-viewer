@@ -3,7 +3,7 @@
 
 import { format } from '../i18n'
 import { isRuntimeExpression, type ArazzoModel, type ArazzoWorkflow, type OverlayModel } from '../spec/arazzo'
-import { asyncSecurityItems, asyncServerList, messagePayload, replyOf, schemaWithFormat, withTraits, type AsyncApiModel, type AsyncChannel, type AsyncMessage, type AsyncOperation, type AsyncServer } from '../spec/asyncapi'
+import { asyncSecurityItems, asyncServerList, followedSchemaWithFormat, messagePayload, replyOf, schemaWithFormat, withTraits, type AsyncApiModel, type AsyncChannel, type AsyncMessage, type AsyncOperation, type AsyncServer } from '../spec/asyncapi'
 import { familyLabel, type Detection } from '../spec/detect'
 import { exampleFromSchema } from '../spec/example'
 import { isObject, own, str, toPointer } from '../spec/pointer'
@@ -170,7 +170,7 @@ function messageBox(ctx: PageCtx, model: AsyncApiModel, msg: AsyncMessage, id: s
   if (intro.filter(Boolean).length) box.append(h('div', { className: 'boxbody' }, ...intro))
 
   // Payload, headers and examples as tabs.
-  const shown = messagePayload(value, msg.loc, model.family)
+  const shown = messagePayload(value, msg.loc, model.family, ctx.refs)
   const payload = shown?.value
   const payloadLoc = shown?.loc ?? child(msg.loc, 'payload')
   const headers = own(value, 'headers')
@@ -185,7 +185,7 @@ function messageBox(ctx: PageCtx, model: AsyncApiModel, msg: AsyncMessage, id: s
     tools.replaceChildren()
     if (which === 'payload' || which === 'headers') {
       // AsyncAPI 3 headers may be a Multi Format Schema Object as well.
-      const part = which === 'payload' ? shown : model.family === 'asyncapi3' ? schemaWithFormat(headers, child(msg.loc, 'headers')) : undefined
+      const part = which === 'payload' ? shown : model.family === 'asyncapi3' ? followedSchemaWithFormat(ctx.refs, headers, child(msg.loc, 'headers')) : undefined
       const raw = which === 'payload' ? payload : (part?.value ?? headers)
       const loc = which === 'payload' ? payloadLoc : (part?.loc ?? child(msg.loc, 'headers'))
       if (part?.format !== undefined) body.append(formatNote(part.format))
