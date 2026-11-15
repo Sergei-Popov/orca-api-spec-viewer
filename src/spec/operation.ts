@@ -238,7 +238,8 @@ export function paramView(refs: Refs, raw: unknown, at: Loc, level: ParamView['l
     view.content = mediaList(refs, own(value, 'content'), child(p.loc, 'content'), family)
     view.examples = examplesOf(refs, own(value, 'examples'), child(p.loc, 'examples'))
     if (!view.style) view.style = where === 'path' || where === 'header' ? 'simple' : where === 'query' || where === 'cookie' ? 'form' : undefined
-    if (view.explode === undefined && view.style) view.explode = view.style === 'form'
+    // explode is true by default for form, and for OpenAPI 3.2's cookie style.
+    if (view.explode === undefined && view.style) view.explode = view.style === 'form' || view.style === 'cookie'
   }
   return view
 }

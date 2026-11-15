@@ -558,3 +558,67 @@ paths:
   assert.equal(plain.placeholders, undefined)
   assert.ok(!renderSample('curl', plain).includes(' -g'), 'no -g when the URL has nothing to expand')
 })
+
+test('samples write arrays and objects as each parameter style says', () => {
+  // Before: every array was joined with commas and every object sent as JSON, whatever the style.
+  const spec = `openapi: 3.1.0
+info: { title: T, version: '1' }
+servers: [{ url: 'https://api.test' }]
+paths:
+  /pets/{ids}:
+    get:
+      parameters:
+        - { name: ids, in: path, required: true, style: matrix, explode: true, example: [1, 2] }
+        - { name: tag, in: query, required: true, example: [cat, dog] }
+        - { name: size, in: query, required: true, explode: false, example: [S, M] }
+        - { name: near, in: query, required: true, style: spaceDelimited, example: [1.5, 2.5] }
+        - { name: by, in: query, required: true, style: pipeDelimited, example: [name, age] }
+        - { name: filter, in: query, required: true, style: deepObject, example: { status: sold, color: red } }
+        - { name: page, in: query, required: true, schema: { type: object, example: { from: 1, to: 9 } } }
+        - { name: X-Range, in: header, required: true, explode: true, example: { from: 1, to: 9 } }
+        - { name: seen, in: cookie, required: true, example: [a, b] }
+      responses: { '200': { description: ok } }
+`
+  const request = one(spec, '/pets/{ids}')
+  assert.equal(request.url, 'https://api.test/pets/;ids=1;ids=2')
+  assert.deepEqual(request.query, [
+    ['tag', 'cat'], ['tag', 'dog'], ['size', 'S,M'], ['near', '1.5 2.5'], ['by', 'name|age'],
+    ['filter[status]', 'sold'], ['filter[color]', 'red'], ['from', '1'], ['to', '9']
+  ])
+  assert.deepEqual(request.headers, [['X-Range', 'from=1,to=9'], ['Cookie', 'seen=a; seen=b']])
+  assert.equal(
+    renderSample('curl', request).split('\n')[0],
+    "curl -g 'https://api.test/pets/;ids=1;ids=2?tag=cat&tag=dog&size=S,M&near=1.5%202.5&by=name%7Cage&filter[status]=sold&filter[color]=red&from=1&to=9' \\"
+  )
+  for (const language of ['curl', 'httpie'] as const) assertSends(language, request)
+  assert.match(renderSample('python', request), /params=\{"tag": \["cat", "dog"\], "size": "S,M", "near": "1\.5 2\.5", "by": "name\|age", "filter\[status\]": "sold", "filter\[color\]": "red", "from": "1", "to": "9"\}/)
+})
+
+test('Swagger 2.0 samples follow collectionFormat, in the query and in forms', () => {
+  const spec = `swagger: '2.0'
+info: { title: T, version: '1' }
+host: api.test
+schemes: [https]
+paths:
+  /find/{ids}:
+    post:
+      consumes: [application/x-www-form-urlencoded]
+      parameters:
+        - { name: ids, in: path, required: true, type: array, items: { type: integer }, collectionFormat: pipes, x-example: [1, 2] }
+        - { name: tag, in: query, required: true, type: array, items: { type: string }, collectionFormat: multi, x-example: [cat, dog] }
+        - { name: size, in: query, required: true, type: array, items: { type: string }, collectionFormat: ssv, x-example: [S, M] }
+        - { name: kind, in: formData, required: true, type: array, items: { type: string }, collectionFormat: multi, x-example: [a, b] }
+        - { name: note, in: formData, required: true, type: string, x-example: hi }
+      responses: { '200': { description: ok } }
+`
+  const request = one(spec, '/find/{ids}')
+  assert.equal(request.url, 'https://api.test/find/1%7C2')
+  assert.deepEqual(request.query, [['tag', 'cat'], ['tag', 'dog'], ['size', 'S M']])
+  assert.deepEqual(request.body!.form!.map((f) => [f.name, f.value]), [['kind', 'a'], ['kind', 'b'], ['note', 'hi']])
+  for (const language of ['curl', 'httpie'] as const) assertSends(language, request)
+  const python = renderSample('python', request)
+  assert.match(python, /params=\{"tag": \["cat", "dog"\], "size": "S M"\}/)
+  assert.match(python, /data=\{"kind": \["a", "b"\], "note": "hi"\}/)
+  // An object literal would keep one of the repeated fields; fetch gets the list of pairs.
+  assert.match(renderSample('fetch', request), /body: new URLSearchParams\(\[\n {4}\['kind', 'a'\],\n {4}\['kind', 'b'\],\n {4}\['note', 'hi'\],\n {2}\]\),/)
+})

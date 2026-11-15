@@ -5,6 +5,7 @@ import { exampleFromSchema } from './example'
 import { jsonText } from './json-text'
 import type { OpenApiModel, Operation } from './openapi'
 import { operationSecurity, operationServers, securitySchemes } from './openapi'
+import { styledHeader, styledPairs, styledPath, type ParamStyle } from './param-style'
 import type { MediaView, OperationDetails, ParamView } from './operation'
 import { isObject, own, str } from './pointer'
 import type { Refs } from './refs'
@@ -74,21 +75,23 @@ export function buildRequest(model: OpenApiModel, refs: Refs, op: Operation, det
   let path = op.route
   for (const param of details.params) {
     if (param.stop) continue
-    const value = paramExample(refs, param)
+    // Arrays and objects are written as the parameter's style (or collectionFormat) says.
+    const value = paramValue(refs, param)
+    const style = styleOf(param)
     if (param.in === 'path') {
-      if (value !== undefined) path = path.split(`{${param.name}}`).join(encodeComponent(value))
+      if (value !== undefined) path = path.split(`{${param.name}}`).join(styledPath(style, value, encodeComponent))
       if (value !== undefined && illFormed(value)) request.replaced = true
     } else if (!param.required && value === undefined) {
       continue
     } else if (!param.required && !param.hasExample && param.examples.length === 0) {
       continue
     } else if (param.in === 'query') {
-      request.query.push([param.name, value ?? ''])
+      request.query.push(...(value === undefined ? [[param.name, ''] as [string, string]] : styledPairs(style, value)))
     } else if (param.in === 'header') {
       // A name that is not a token cannot be sent; curl would read `@name…` as a file.
-      if (isHttpToken(param.name) && !/^(accept|content-type|authorization)$/i.test(param.name)) request.headers.push([param.name, value ?? ''])
+      if (isHttpToken(param.name) && !/^(accept|content-type|authorization)$/i.test(param.name)) request.headers.push([param.name, value === undefined ? '' : styledHeader(style, value)])
     } else if (param.in === 'cookie') {
-      cookies.push(`${param.name}=${value ?? ''}`)
+      for (const [name, text] of value === undefined ? [[param.name, '']] : styledPairs(style, value)) cookies.push(`${name}=${text}`)
     }
   }
 
@@ -126,11 +129,12 @@ export function buildRequest(model: OpenApiModel, refs: Refs, op: Operation, det
       if (details.body.formFields.length > 0) {
         request.body = {
           mediaType: media.type,
-          form: details.body.formFields.map((field) => ({
-            name: field.name,
-            value: own(field.raw, 'type') === 'file' ? 'file.bin' : paramExample(refs, field) ?? '',
-            file: own(field.raw, 'type') === 'file'
-          }))
+          form: details.body.formFields.flatMap((field): FormField[] => {
+            if (own(field.raw, 'type') === 'file') return [{ name: field.name, value: 'file.bin', file: true }]
+            const value = paramValue(refs, field)
+            const pairs = value === undefined ? [[field.name, ''] as [string, string]] : styledPairs(styleOf(field), value)
+            return pairs.map(([name, text]) => ({ name, value: text, file: false }))
+          })
         }
       } else if (/[/+]json\b|^application\/json/i.test(media.type)) {
         request.body = { mediaType: media.type, json: example === undefined ? {} : example }
@@ -244,7 +248,12 @@ function tooLarge(value: unknown): boolean {
   return jsonText(value, { maxLength: MAX_BODY }).cut
 }
 
-function paramExample(refs: Refs, param: ParamView): string | undefined {
+function styleOf(param: ParamView): ParamStyle {
+  return { name: param.name, style: param.style, explode: param.explode, collectionFormat: param.collectionFormat, json: param.content.length > 0 }
+}
+
+/** The parameter's example value as the document gives it (or one made from its schema). */
+function paramValue(refs: Refs, param: ParamView): unknown {
   let value: unknown
   if (param.hasExample) value = param.example
   else if (param.examples.find((e) => e.hasValue)) value = param.examples.find((e) => e.hasValue)!.value
@@ -257,10 +266,7 @@ function paramExample(refs: Refs, param: ParamView): string | undefined {
       else if (param.required) value = exampleFromSchema(refs, schema, param.schema.loc, { mode: 'request', maxDepth: 3 })
     }
   }
-  if (value === undefined || value === null) return undefined
-  if (Array.isArray(value)) return value.slice(0, 100).map((v) => (typeof v === 'object' ? compact(v) : String(v))).join(',')
-  if (typeof value === 'object') return compact(value)
-  return String(value)
+  return value === null ? undefined : value
 }
 
 /** Compact JSON for a parameter or form value, with a size cap. */
@@ -290,7 +296,8 @@ function formFields(refs: Refs, media: MediaView, example: unknown): FormField[]
 
 function urlWithQuery(request: SampleRequest): string {
   if (request.query.length === 0) return request.url
-  const query = request.query.map(([k, v]) => `${encodeComponent(k)}=${encodeQueryValue(v)}`).join('&')
+  // Brackets in names (deepObject's `filter[status]`) and commas between items stay readable.
+  const query = request.query.map(([k, v]) => `${encodeComponent(k).replace(/%5B/g, '[').replace(/%5D/g, ']')}=${encodeQueryValue(v).replace(/%2C/g, ',')}`).join('&')
   return `${request.url}${request.url.includes('?') ? '&' : '?'}${query}`
 }
 
@@ -395,6 +402,11 @@ function renderFetch(request: SampleRequest): string {
     }
     out.push('')
     options.push('  body: form,')
+  } else if (body?.form && new Set(body.form.map((f) => f.name)).size < body.form.length) {
+    // An object literal keeps one value per name; repeated names need the list of pairs.
+    options.push('  body: new URLSearchParams([')
+    for (const field of body.form) options.push(`    [${jsString(field.name)}, ${jsString(field.value)}],`)
+    options.push('  ]),')
   } else if (body?.form) {
     options.push('  body: new URLSearchParams({')
     for (const field of body.form) options.push(`    ${jsKey(field.name)}: ${jsString(field.value)},`)
@@ -436,10 +448,22 @@ export function toPython(value: unknown, indent = 0): string {
   return pyString(String(value))
 }
 
+/** A dict for requests' params= or data=: a repeated name gets a list, which requests sends as repeats. */
+function pyDict(pairs: [string, string][]): string {
+  const grouped = new Map<string, string[]>()
+  for (const [name, value] of pairs) {
+    const values = grouped.get(name)
+    if (values) values.push(value)
+    else grouped.set(name, [value])
+  }
+  const entries = [...grouped].map(([name, values]) => `${pyString(name)}: ${values.length === 1 ? pyString(values[0]) : `[${values.map(pyString).join(', ')}]`}`)
+  return `{${entries.join(', ')}}`
+}
+
 function renderPython(request: SampleRequest): string {
   const args: string[] = [`    ${pyString(request.url)}`]
   if (request.query.length > 0) {
-    args.push(`    params={${request.query.map(([k, v]) => `${pyString(k)}: ${pyString(v)}`).join(', ')}}`)
+    args.push(`    params=${pyDict(request.query)}`)
   }
   // `json=` sets Content-Type: application/json itself.
   const headers = request.headers.filter(([name, value]) => !(request.body?.json !== undefined && name === 'Content-Type' && /^application\/json$/i.test(value)))
@@ -450,7 +474,7 @@ function renderPython(request: SampleRequest): string {
   else if (body?.form) {
     const files = body.form.filter((f) => f.file)
     const data = body.form.filter((f) => !f.file)
-    if (data.length > 0) args.push(`    data={${data.map((f) => `${pyString(f.name)}: ${pyString(f.value)}`).join(', ')}}`)
+    if (data.length > 0) args.push(`    data=${pyDict(data.map((f) => [f.name, f.value]))}`)
     if (files.length > 0) args.push(`    files={${files.map((f) => `${pyString(f.name)}: open(${pyString(f.value)}, "rb")`).join(', ')}}`)
   } else if (body?.text !== undefined) args.push(`    data=${pyString(body.text)}`)
   const method = request.method.toLowerCase()
