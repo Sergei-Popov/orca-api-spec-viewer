@@ -264,9 +264,19 @@ function detailsOf(build: Build, schema: Record<string, unknown>, loc: Loc, opti
   return out
 }
 
-/** Children of a schema: properties (with `allOf` merged), patterns, items, variants… */
-function itemsOf(build: Build, schema: Record<string, unknown>, loc: Loc): { items: Item[]; variants: { key: 'oneOf' | 'anyOf'; schema: Record<string, unknown>; loc: Loc }[] } {
+/**
+ * Children of a schema: properties (with `allOf` merged), patterns, items, variants… `chain` holds
+ * the schemas being flattened into this list, so an array whose items lead back to one of them is
+ * shown as an `items` row (a recursive link) instead of being flattened forever.
+ */
+export function itemsOf(
+  build: Pick<Build, 'ctx'>,
+  schema: Record<string, unknown>,
+  loc: Loc,
+  chain: Set<object> = new Set()
+): { items: Item[]; variants: { key: 'oneOf' | 'anyOf'; schema: Record<string, unknown>; loc: Loc }[] } {
   const { ctx } = build
+  chain.add(schema)
   const t = ctx.t
   const merged = mergedProperties(ctx, schema, loc, new Set(), 0)
   const items = merged.items
@@ -280,9 +290,9 @@ function itemsOf(build: Build, schema: Record<string, unknown>, loc: Loc): { ite
   if (array && rawItems !== undefined && !Array.isArray(rawItems)) {
     const r = resolve(ctx, rawItems, child(loc, 'items'))
     const inner = isObject(r.schema) ? r.schema : null
-    const flat = inner && !r.stop && !r.cycle && isObject(own(inner, 'properties')) && !Array.isArray(own(inner, 'oneOf')) && !Array.isArray(own(inner, 'anyOf'))
+    const flat = inner && !r.stop && !r.cycle && !chain.has(inner) && isObject(own(inner, 'properties')) && !Array.isArray(own(inner, 'oneOf')) && !Array.isArray(own(inner, 'anyOf'))
     if (flat && inner) {
-      const sub = itemsOf(build, inner, r.loc)
+      const sub = itemsOf(build, inner, r.loc, chain)
       items.push(...sub.items)
       merged.variants.push(...sub.variants)
     } else items.push({ label: t.items, role: 'role', raw: rawItems, loc: child(loc, 'items'), segment: 'items' })
