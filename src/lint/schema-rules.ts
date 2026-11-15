@@ -255,7 +255,8 @@ function checkValues(schema: Record<string, unknown>, path: string[], ctx: WalkC
       })
     }
   }
-  const nullable = types.includes('null')
+  // A null value fits a nullable schema even without a `type` (nothing constrains it then).
+  const nullable = types.includes('null') || own(schema, 'nullable') === true
   if (Object.prototype.hasOwnProperty.call(schema, 'default')) {
     const value = own(schema, 'default')
     if (!fitsTypes(value, types) && !(value === null && nullable)) {

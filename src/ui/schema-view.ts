@@ -381,7 +381,7 @@ function itemNode(build: Build, item: Item, id: string, depth: number, ancestors
   if (schema?.deprecated === true) head.push(h('span', { className: 'flag dep-chip' }, ctx.t.deprecated))
   if (schema?.readOnly === true) head.push(h('span', { className: 'flag' }, ctx.t.readOnly))
   if (schema?.writeOnly === true) head.push(h('span', { className: 'flag' }, ctx.t.writeOnly))
-  if (schema && schemaTypes(schema).includes('null') && own(schema, 'nullable') === true) head.push(h('span', { className: 'flag' }, ctx.t.nullable))
+  if (schema && own(schema, 'nullable') === true) head.push(h('span', { className: 'flag' }, ctx.t.nullable))
   if (recursive) {
     const target = refTarget(ctx, r.loc)
     const label = format(ctx.t.recursive, { name: r.ref ? refName(r.ref) : item.label })
