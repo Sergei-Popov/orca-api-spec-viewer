@@ -37,7 +37,8 @@ Kubernetes manifest, a `package.json`, a Swagger 1.x file, and so on).
   filter, a switch between summaries and paths, and keyboard navigation. Back and forward
   (⌘[ / ⌘], Alt+← / Alt+→, mouse buttons) remember where you were on each page.
 - **Search (⌘F or Ctrl+F):** across paths, operationIds, summaries, descriptions, tags,
-  component and property names, channels, messages and workflows, with highlighted matches.
+  component and property names, channels, messages and workflows, with highlighted matches. It
+  lists the best 200 matches and says how many there are in all.
 - **Operation page:** method and path, summary and description, deprecation, operationId,
   servers that override the root ones, security requirements, parameters by location with
   style, explode and schema, the request body per media type, responses per status with
@@ -51,12 +52,15 @@ Kubernetes manifest, a `package.json`, a Swagger 1.x file, and so on).
 - **Examples:** the examples the document gives, each in its own tab, or one generated from the
   schema (marked as generated) when it gives none.
 - **Code samples:** curl, JavaScript `fetch`, Python `requests` and HTTPie, built from the
-  operation, its first server, security and example body, with copy buttons. API Spec Viewer
-  never sends requests: Orca's plugin views have no network, and the page says so instead of
-  offering a "Try it out" button that could not work.
+  operation, its first server, security and example body, with copy buttons. Every value from the
+  document is quoted for the shell and sent as text: an example such as `@.env` never makes curl
+  or HTTPie read a local file. An operation whose method is not a valid HTTP method name gets no
+  samples. API Spec Viewer never sends requests: Orca's plugin views have no network, and the page
+  says so instead of offering a "Try it out" button that could not work.
 - **References:** internal `$ref` and `$dynamicRef` are followed lazily, across chains and
-  cycles. References to other files or URLs are shown as external, with the file and the place in
-  it. Each component page lists where it is used.
+  cycles, relative to the nearest `$id` as JSON Schema 2020-12 does. A chain of more than 128
+  references is reported rather than followed. References to other files or URLs are shown as
+  external, with the file and the place in it. Each component page lists where it is used.
 - **Problems panel:** structural checks for the document's version (required and unknown fields,
   wrong types, fields from another version) and lint: unresolved references, duplicate
   operationIds, path parameters that are not declared or not used, equivalent paths, missing or
@@ -64,20 +68,26 @@ Kubernetes manifest, a `package.json`, a Swagger 1.x file, and so on).
   examples that do not fit their schema, invalid patterns, `minimum` above `maximum`, broken
   discriminators, undeclared tags, and AsyncAPI, Arazzo and Overlay checks. Each problem has its
   line and column and its JSON pointer; click it to open the page, or its line to see the source
-  with the problem marked.
+  with the problem marked. The source view scrolls sideways; a line longer than 4,000 characters
+  shows the part around the problem and says how many characters are left out.
 - **Live:** when the file changes (in Orca's text editor or on disk), the view redraws in place
   and keeps the page, scroll position, open tree nodes and tabs.
 - **Damaged files:** a file with YAML or JSON errors still shows what could be read, with a banner
   that points at the first error.
+- **YAML anchors and aliases** are resolved once. An alias inside the node it names becomes a
+  `$ref` to that node, with a warning, and expansion stops at a million values, so a file built to
+  blow up gets an error instead of a frozen tab. A file with several YAML documents (`---`) shows
+  the first one and says so.
 - English and Russian, following Orca's language; light and dark, following Orca's theme.
 
 ## Limits
 
 - **Size.** Orca sends a custom editor at most about 50 MiB and shows its own notice for larger
   files. Up to that size the viewer works: a 45 MiB OpenAPI JSON with 12,000 pages opens in
-  about a second, a 14 MiB one (GitHub's REST API) in about 0.15 s, and a 10 MiB YAML file in about
-  a second, with a spinner while it parses. Long lists (the sidebar, problems, source lines,
-  search results) draw only the rows on screen. The problems panel keeps the first 5,000 problems
+  about a second, a 14 MiB one (GitHub's REST API) in about 0.15 s, and the same API as 10.5 MiB
+  of YAML in about a second, with a spinner while it parses. Other YAML can take longer: 8 MiB
+  written as many short `{ … }` mappings takes about 4 s. Long lists (the sidebar, problems,
+  source lines) draw only the rows on screen. The problems panel keeps the first 5,000 problems
   and counts the rest.
 - **Other files.** Orca gives an editor only the open file, never its path or the files beside
   it, so references to other files cannot load by themselves. They are shown as external, with
@@ -128,7 +138,7 @@ orca plugin shot local.api-spec-viewer --editor test-files/bookshelf.openapi.yam
 - `src/lint/` — the problems engine: per-version structure tables, schema checks and semantic
   rules.
 - `src/markdown/` — a small CommonMark and GFM renderer that drops raw HTML and builds DOM nodes,
-  never HTML strings.
+  never HTML strings. It parses in linear time and caps emphasis nesting and table columns.
 - `src/view/` — the sidebar tree and the search index; `src/ui/` — the pages and the shell.
 - `tools/rasterize-icons.sh` — makes the icon PNGs from their SVG sources with headless Chrome.
 

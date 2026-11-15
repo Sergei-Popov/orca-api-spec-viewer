@@ -7,6 +7,11 @@ export type RuleCode =
   // The text itself
   | 'syntax'
   | 'duplicate-key'
+  | 'yaml-alias-cycle'
+  | 'yaml-alias-limit'
+  | 'yaml-documents'
+  /** The checks themselves failed; the document is still shown. */
+  | 'lint-failed'
   // Structure, per version
   | 'required-field'
   | 'unknown-field'
@@ -21,6 +26,7 @@ export type RuleCode =
   | 'unresolved-ref'
   | 'external-ref'
   | 'circular-ref'
+  | 'long-ref-chain'
   | 'ref-siblings'
   // OpenAPI semantics
   | 'duplicate-operation-id'

@@ -1,6 +1,7 @@
 import { assert, test } from 'orca/testing'
 import { parseText } from './index'
 import { parseJson } from './json'
+import { LineIndex, MAX_LINE } from './lines'
 
 test('clean JSON parses with JSON.parse and locates keys by line', () => {
   const text = '{\n  "openapi": "3.1.0",\n  "paths": {\n    "/a~b/c": {\n      "get": {}\n    }\n  },\n  "list": [1, {"x": 2}]\n}\n'
@@ -94,4 +95,17 @@ test('an empty file and a lone scalar', () => {
   assert.equal(parseText('').value, null)
   assert.equal(parseText('   \n').value, null)
   assert.equal(parseText('hello').value, 'hello')
+})
+
+test('source lines: lengths, slices and the widest line as drawn', () => {
+  const long = 'x'.repeat(MAX_LINE + 500)
+  const lines = new LineIndex(`a\tb\r\n${long}\nlast`)
+  assert.equal(lines.lineCount, 3)
+  assert.equal(lines.line(1), 'a\tb', 'no CR')
+  assert.equal(lines.lineLength(2), MAX_LINE + 500)
+  assert.equal(lines.line(2).length, MAX_LINE, 'the view shows a part of a long line and says how much is left')
+  assert.equal(lines.slice(2, MAX_LINE + 490, MAX_LINE + 600), 'x'.repeat(10))
+  assert.equal(lines.slice(3, 1, 3), 'as')
+  assert.equal(lines.widest(MAX_LINE), MAX_LINE)
+  assert.equal(new LineIndex('a\tb\nab').widest(MAX_LINE), 3 + 7, 'a tab counts as eight columns')
 })

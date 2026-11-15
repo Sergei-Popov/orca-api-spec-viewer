@@ -5,6 +5,7 @@
 import { isObject, own } from './pointer'
 import type { Loc, Refs } from './refs'
 import { schemaTypes } from './schema'
+import { jsonText } from './json-text'
 
 export interface ExampleOptions {
   /** Requests leave out `readOnly` properties, responses `writeOnly` ones. */
@@ -199,12 +200,6 @@ function mergeExample(a: unknown, b: unknown): unknown {
 
 /** Pretty JSON for display, with a size cap so a huge example does not stall the page. */
 export function prettyJson(value: unknown, maxLength = 200_000): { text: string; cut: boolean } {
-  let text: string
-  try {
-    text = JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? v.toString() : v), 2) ?? String(value)
-  } catch {
-    text = String(value)
-  }
-  if (text.length > maxLength) return { text: text.slice(0, maxLength), cut: true }
-  return { text, cut: false }
+  if (value === undefined) return { text: '', cut: false }
+  return jsonText(value, { maxLength, indent: 2 })
 }

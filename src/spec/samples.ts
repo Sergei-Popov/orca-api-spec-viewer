@@ -2,13 +2,16 @@
 // Python requests and HTTPie. Values come from the document's examples, else from the schema.
 
 import { exampleFromSchema } from './example'
+import { jsonText } from './json-text'
 import type { OpenApiModel, Operation } from './openapi'
 import { operationSecurity, operationServers, securitySchemes } from './openapi'
 import type { MediaView, OperationDetails, ParamView } from './operation'
 import { isObject, own, str } from './pointer'
 import type { Refs } from './refs'
+import { isHttpToken } from './token'
 
 export type SampleLanguage = 'curl' | 'fetch' | 'python' | 'httpie'
+export { isHttpToken }
 export const SAMPLE_LANGUAGES: SampleLanguage[] = ['curl', 'fetch', 'python', 'httpie']
 
 export interface FormField {
@@ -19,6 +22,8 @@ export interface FormField {
 
 export interface SampleRequest {
   method: string
+  /** Whether the method is an HTTP token (RFC 9110); samples are only offered when it is. */
+  methodValid: boolean
   url: string
   /** Set when the document has no absolute server URL and the host is a stand-in. */
   placeholderHost: boolean
@@ -35,6 +40,9 @@ export interface SampleRequest {
 }
 
 const PLACEHOLDER_HOST = 'https://api.example.com'
+/** Bodies longer than this as JSON text are replaced by an example made from the schema. */
+const MAX_BODY = 100_000
+const STANDARD_METHODS = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace', 'query']
 
 export function buildRequest(model: OpenApiModel, refs: Refs, op: Operation, details: OperationDetails): SampleRequest {
   const servers = operationServers(model, op).servers
@@ -46,8 +54,12 @@ export function buildRequest(model: OpenApiModel, refs: Refs, op: Operation, det
   }
   base = base.replace(/\/+$/, '')
 
+  // Standard methods are lower-case field names; an OpenAPI 3.2 additional operation is keyed by
+  // the method exactly as it is sent.
+  const method = STANDARD_METHODS.includes(op.method) ? op.method.toUpperCase() : op.method
   const request: SampleRequest = {
-    method: op.method.toUpperCase(),
+    method,
+    methodValid: isHttpToken(method),
     url: '',
     placeholderHost,
     query: [],
@@ -68,7 +80,8 @@ export function buildRequest(model: OpenApiModel, refs: Refs, op: Operation, det
     } else if (param.in === 'query') {
       request.query.push([param.name, value ?? ''])
     } else if (param.in === 'header') {
-      if (!/^(accept|content-type|authorization)$/i.test(param.name)) request.headers.push([param.name, value ?? ''])
+      // A name that is not a token cannot be sent; curl would read `@name…` as a file.
+      if (isHttpToken(param.name) && !/^(accept|content-type|authorization)$/i.test(param.name)) request.headers.push([param.name, value ?? ''])
     } else if (param.in === 'cookie') {
       cookies.push(`${param.name}=${value ?? ''}`)
     }
@@ -88,7 +101,7 @@ export function buildRequest(model: OpenApiModel, refs: Refs, op: Operation, det
         const where = str(own(followed, 'in'))
         if (where === 'query') request.query.push([keyName, '<API_KEY>'])
         else if (where === 'cookie') cookies.push(`${keyName}=<API_KEY>`)
-        else request.headers.push([keyName, '<API_KEY>'])
+        else if (isHttpToken(keyName)) request.headers.push([keyName, '<API_KEY>'])
       } else if (type === 'basic' || (type === 'http' && scheme === 'basic')) {
         request.basicAuth = true
       } else if (type === 'http') {
@@ -119,7 +132,7 @@ export function buildRequest(model: OpenApiModel, refs: Refs, op: Operation, det
       } else if (/x-www-form-urlencoded|multipart\/form-data/i.test(media.type)) {
         request.body = { mediaType: media.type, form: formFields(refs, media, example) }
       } else {
-        request.body = { mediaType: media.type, text: typeof example === 'string' ? example : example === undefined ? '' : JSON.stringify(example, null, 2) }
+        request.body = { mediaType: media.type, text: typeof example === 'string' ? example : example === undefined ? '' : jsonText(example, { maxLength: MAX_BODY, indent: 2 }).text }
       }
     }
   }
@@ -146,10 +159,20 @@ function pickMedia(media: MediaView[]): MediaView | undefined {
 }
 
 function mediaExample(refs: Refs, media: MediaView): unknown {
+  const fromSchema = () => (media.schema && !media.schema.stop ? exampleFromSchema(refs, media.schema.value, media.schema.loc, { mode: 'request' }) : undefined)
   const given = media.examples.find((e) => e.hasValue)
-  if (given) return given.value
-  if (media.schema && !media.schema.stop) return exampleFromSchema(refs, media.schema.value, media.schema.loc, { mode: 'request' })
-  return undefined
+  if (!given) return fromSchema()
+  // A huge example (or YAML aliases that stand for one) would make an unreadable sample.
+  if (tooLarge(given.value)) {
+    const made = fromSchema()
+    return made === undefined || tooLarge(made) ? undefined : made
+  }
+  return given.value
+}
+
+function tooLarge(value: unknown): boolean {
+  if (typeof value === 'string') return value.length > MAX_BODY
+  return jsonText(value, { maxLength: MAX_BODY }).cut
 }
 
 function paramExample(refs: Refs, param: ParamView): string | undefined {
@@ -166,9 +189,14 @@ function paramExample(refs: Refs, param: ParamView): string | undefined {
     }
   }
   if (value === undefined || value === null) return undefined
-  if (Array.isArray(value)) return value.map((v) => (typeof v === 'object' ? JSON.stringify(v) : String(v))).join(',')
-  if (typeof value === 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return value.slice(0, 100).map((v) => (typeof v === 'object' ? compact(v) : String(v))).join(',')
+  if (typeof value === 'object') return compact(value)
   return String(value)
+}
+
+/** Compact JSON for a parameter or form value, with a size cap. */
+function compact(value: unknown): string {
+  return jsonText(value, { maxLength: 4000 }).text
 }
 
 function formFields(refs: Refs, media: MediaView, example: unknown): FormField[] {
@@ -186,7 +214,7 @@ function formFields(refs: Refs, media: MediaView, example: unknown): FormField[]
     }
     const value = values[name]
     if (value === undefined) continue
-    fields.push({ name, value: typeof value === 'object' ? JSON.stringify(value) : String(value) })
+    fields.push({ name, value: typeof value === 'object' && value !== null ? compact(value) : String(value) })
   }
   return fields
 }
@@ -208,6 +236,12 @@ export function shellQuote(text: string): string {
   return `'${text.replace(/'/g, `'\\''`)}'`
 }
 
+/** The languages a request can be written in: HTTPie takes only methods made of letters. */
+export function sampleLanguages(request: SampleRequest): SampleLanguage[] {
+  if (!request.methodValid) return []
+  return SAMPLE_LANGUAGES.filter((language) => language !== 'httpie' || /^[A-Za-z]+$/.test(request.method))
+}
+
 export function renderSample(language: SampleLanguage, request: SampleRequest): string {
   switch (language) {
     case 'curl':
@@ -221,19 +255,29 @@ export function renderSample(language: SampleLanguage, request: SampleRequest): 
   }
 }
 
+// curl reads a file for `@name` in --data/-d and for `@name` or `<name` in -F values. Text bodies
+// therefore go through --data-raw and form values through --form-string, which never read files;
+// `-F` is left only for the file fields the sample means to upload. JSON text from -d always
+// starts with `{`, `[`, `"`, a digit or a letter, never with `@`.
 function renderCurl(request: SampleRequest): string {
   const lines: string[] = []
-  const first = request.method === 'GET' ? 'curl' : `curl -X ${request.method}`
+  const first = request.method === 'GET' ? 'curl' : `curl -X ${shellQuote(request.method)}`
   lines.push(`${first} ${shellQuote(urlWithQuery(request))}`)
   if (request.basicAuth) lines.push(`-u ${shellQuote('<USERNAME>:<PASSWORD>')}`)
-  for (const [name, value] of request.headers) lines.push(`-H ${shellQuote(`${name}: ${value}`)}`)
+  // `Name;` sends an empty header; `Name: ` with nothing after it would remove the header.
+  for (const [name, value] of request.headers) lines.push(`-H ${shellQuote(value === '' ? `${name};` : `${name}: ${value}`)}`)
   const body = request.body
-  if (body?.json !== undefined) lines.push(`-d ${shellQuote(JSON.stringify(body.json, null, 2))}`)
+  if (body?.json !== undefined) lines.push(`-d ${shellQuote(jsonText(body.json, { maxLength: MAX_BODY, indent: 2 }).text)}`)
   else if (body?.form && /multipart/i.test(body.mediaType)) {
-    for (const field of body.form) lines.push(`-F ${shellQuote(field.file ? `${field.name}=@${field.value}` : `${field.name}=${field.value}`)}`)
+    for (const field of body.form) {
+      if (!field.file) lines.push(`--form-string ${shellQuote(`${field.name}=${field.value}`)}`)
+      // curl splits -F at the first `=`: a name with one cannot be written.
+      else if (!field.name.includes('=')) lines.push(`-F ${shellQuote(`${field.name}=@${field.value}`)}`)
+    }
   } else if (body?.form) {
+    // `name=value` is never read from a file: curl splits at the first `=` and encodes the rest.
     for (const field of body.form) lines.push(`--data-urlencode ${shellQuote(`${field.name}=${field.value}`)}`)
-  } else if (body?.text !== undefined) lines.push(`--data-binary ${shellQuote(body.text)}`)
+  } else if (body?.text !== undefined) lines.push(`--data-raw ${shellQuote(body.text)}`)
   return lines.join(' \\\n  ')
 }
 
@@ -276,7 +320,7 @@ function renderFetch(request: SampleRequest): string {
     for (const field of body.form) options.push(`    ${jsKey(field.name)}: ${jsString(field.value)},`)
     options.push('  }),')
   } else if (body?.json !== undefined) {
-    options.push(`  body: JSON.stringify(${indentBlock(JSON.stringify(body.json, null, 2), '  ')}),`)
+    options.push(`  body: JSON.stringify(${indentBlock(jsonText(body.json, { maxLength: MAX_BODY, indent: 2 }).text, '  ')}),`)
   } else if (body?.text !== undefined) {
     options.push(`  body: ${jsString(body.text)},`)
   }
@@ -335,6 +379,32 @@ function renderPython(request: SampleRequest): string {
   return `import requests\n\nresponse = ${call}\nprint(response.json())`
 }
 
+// HTTPie request items: `Header:value`, `Header;` (empty), `name==query`, `field=text`,
+// `field:=json`, `field@file`, and with `@` after the separator (`field=@file`, `Header:@file`) the
+// value is read from a file. A backslash before `:`, `;`, `=` or `@` makes it literal, so keys are
+// escaped wholly and a value that starts with one of them gets a backslash. A value that already has
+// a backslash before one of them cannot be written exactly: queries then go in the URL and JSON
+// bodies through --raw. An item that starts with `-` would read as an option.
+const HTTPIE_SPECIAL = /[:;=@]/g
+
+function httpieKey(key: string): string | null {
+  if (key === '' || key.startsWith('-') || /\\([:;=@]|$)/.test(key)) return null
+  return key.replace(HTTPIE_SPECIAL, (c) => '\\' + c)
+}
+
+function httpieValue(value: string): string | null {
+  if (/\\[:;=@]/.test(value)) return null
+  return httpieLooseValue(value)
+}
+
+/** Safe but not exact: a backslash the value has before a separator character is lost. */
+function httpieLooseValue(value: string): string {
+  return /^[:;=@]/.test(value) ? '\\' + value : value
+}
+
+/** JSON body keys HTTPie takes as they are: it reads `[` and `]` in keys as nested JSON paths. */
+const HTTPIE_PLAIN_KEY = /^[A-Za-z_][A-Za-z0-9_.-]*$/
+
 function renderHttpie(request: SampleRequest): string {
   const parts: string[] = []
   const body = request.body
@@ -342,25 +412,53 @@ function renderHttpie(request: SampleRequest): string {
   const head = ['http']
   if (form) head.push(/multipart/i.test(body!.mediaType) ? '--multipart' : '--form')
   if (request.basicAuth) head.push(`-a ${shellQuote('<USERNAME>:<PASSWORD>')}`)
-  head.push(request.method, shellQuote(request.url))
-  parts.push(head.join(' '))
-  for (const [k, v] of request.query) parts.push(shellQuote(`${k}==${v}`))
+  const items: string[] = []
+  const inUrl: [string, string][] = []
+  for (const [k, v] of request.query) {
+    const key = httpieKey(k)
+    const value = httpieValue(v)
+    if (key === null || value === null) inUrl.push([k, v])
+    else items.push(shellQuote(`${key}==${value}`))
+  }
+  head.push(shellQuote(request.method), shellQuote(urlWithQuery({ ...request, query: inUrl })))
+  parts.push(head.join(' '), ...items)
   for (const [name, value] of request.headers) {
-    if (name === 'Content-Type' && (body?.json !== undefined || form)) continue
-    parts.push(shellQuote(`${name}:${value}`))
+    // HTTPie sets these itself: application/json for JSON, and the form types.
+    if (name === 'Content-Type' && (form || (body?.json !== undefined && /^application\/json$/i.test(value)))) continue
+    if (name.startsWith('-')) continue
+    parts.push(shellQuote(value === '' ? `${name};` : `${name}:${httpieLooseValue(value)}`))
   }
   if (form) {
-    for (const field of form) parts.push(shellQuote(field.file ? `${field.name}@${field.value}` : `${field.name}=${field.value}`))
+    for (const field of form) {
+      const key = httpieKey(field.name)
+      if (key === null) continue
+      parts.push(shellQuote(field.file ? `${key}@${field.value}` : `${key}=${httpieLooseValue(field.value)}`))
+    }
   } else if (body?.json !== undefined) {
     const json = body.json
-    if (isObject(json) && Object.values(json).every((v) => v === null || typeof v !== 'object')) {
-      for (const [k, v] of Object.entries(json)) parts.push(shellQuote(typeof v === 'string' ? `${k}=${v}` : `${k}:=${JSON.stringify(v)}`))
-    } else {
-      parts.push(`--raw ${shellQuote(JSON.stringify(json))}`)
+    const flat: string[] = []
+    let simple = isObject(json) && Object.keys(json).length > 0
+    if (simple) {
+      for (const [k, v] of Object.entries(json as Record<string, unknown>)) {
+        if (!HTTPIE_PLAIN_KEY.test(k) || (v !== null && typeof v === 'object')) {
+          simple = false
+          break
+        }
+        if (typeof v === 'string') {
+          const value = httpieValue(v)
+          if (value === null) {
+            simple = false
+            break
+          }
+          flat.push(shellQuote(`${k}=${value}`))
+        } else flat.push(shellQuote(`${k}:=${jsonText(v, { maxLength: 100 }).text}`))
+      }
     }
+    if (simple) parts.push(...flat)
+    else parts.push(`--raw=${shellQuote(jsonText(json, { maxLength: MAX_BODY }).text)}`)
   } else if (body?.text !== undefined) {
-    parts.push(`Content-Type:${shellQuote(body.mediaType)}`)
-    parts.push(`--raw ${shellQuote(body.text)}`)
+    // --raw=… so a body that starts with `-` is not read as an option; --raw never reads files.
+    parts.push(`--raw=${shellQuote(body.text)}`)
   }
   return parts.join(' \\\n  ')
 }

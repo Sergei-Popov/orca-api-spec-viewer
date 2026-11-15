@@ -2,7 +2,8 @@
 // model of its version, the reference resolver and the problems. DOM-free, so tests run it.
 
 import { lintDocument, type Problem, type Usages } from './lint/index'
-import { parseText, type ParsedText } from './parse/index'
+import type { RuleCode } from './lint/problem'
+import { parseText, type ParsedText, type ParseIssue } from './parse/index'
 import { buildArazzo, buildOverlay, type ArazzoModel, type OverlayModel } from './spec/arazzo'
 import { buildAsyncApi, type AsyncApiModel } from './spec/asyncapi'
 import { detect, type Detection } from './spec/detect'
@@ -48,23 +49,40 @@ export function analyze(text: string, documents?: ReadonlyMap<string, unknown>):
   }
   const t2 = now()
   const problems: Problem[] = parsed.issues.map((issue) => ({
-    rule: issue.code === 'duplicate-key' ? 'duplicate-key' : 'syntax',
+    rule: issueRule(issue.code),
     severity: issue.severity,
     path: [],
-    params: {},
+    params: issue.params ?? {},
     offset: issue.offset,
     text: issue.message
   }))
   let dropped = 0
   let usages: Usages = new Map()
   if (detection.spec && isObject(parsed.value) && model) {
-    const result = lintDocument(parsed.value, detection.family, refs, model.kind === 'overlay' ? { kind: 'overlay' } : model)
-    problems.push(...result.problems.items)
-    dropped = result.problems.dropped
-    usages = result.usages
+    // A failure in the checks must not hide the document: it becomes one problem.
+    try {
+      const result = lintDocument(parsed.value, detection.family, refs, model.kind === 'overlay' ? { kind: 'overlay' } : model)
+      problems.push(...result.problems.items)
+      dropped = result.problems.dropped
+      usages = result.usages
+    } catch (error) {
+      problems.push({ rule: 'lint-failed', severity: 'warning', path: [], params: { error: error instanceof Error ? error.message : String(error) } })
+    }
   }
   const t3 = now()
   return { parsed, detection, refs, model, problems, dropped, usages, timings: { parse: t1 - t0, model: t2 - t1, lint: t3 - t2 } }
+}
+
+function issueRule(code: ParseIssue['code']): RuleCode {
+  switch (code) {
+    case 'duplicate-key':
+    case 'yaml-alias-cycle':
+    case 'yaml-alias-limit':
+    case 'yaml-documents':
+      return code
+    default:
+      return 'syntax'
+  }
 }
 
 function now(): number {

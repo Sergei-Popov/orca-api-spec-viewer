@@ -6,7 +6,7 @@ import { format, type Strings } from '../i18n'
 import { renderMarkdown, type MarkdownHost } from '../markdown/render'
 import { prettyJson } from '../spec/example'
 import { isObject, own, str, toPointer } from '../spec/pointer'
-import { splitRef, type Loc, type Refs, type Resolution } from '../spec/refs'
+import { MAX_HOPS, splitRef, type Loc, type Refs, type Resolution } from '../spec/refs'
 import { refName } from '../spec/schema'
 import { append, button, clickable, h, svg, type Child } from './dom'
 import { icons } from './icons'
@@ -100,7 +100,8 @@ export function kvList(pairs: [Child, Child][]): HTMLElement | null {
 
 export function tabs(ctx: PageCtx, id: string, options: { value: string; label: Child; mono?: boolean }[], fallback: string, onChange: (value: string) => void): HTMLElement {
   const el = h('div', { className: 'tabs', role: 'tablist' })
-  const current = ctx.tab(id, fallback)
+  const saved = ctx.tab(id, fallback)
+  const current = options.some((o) => o.value === saved) ? saved : fallback
   for (const option of options) {
     const tab = button(`tab${option.mono ? ' mono' : ''}${option.value === current ? ' on' : ''}`, option.label, undefined, () => {
       ctx.setTab(id, option.value)
@@ -226,6 +227,7 @@ export function stopNote(ctx: PageCtx, stop: Exclude<Resolution, { kind: 'local'
       )
     )
   }
+  if (stop.reason === 'too-long') return banner('warning', format(ctx.t.refChainTooLong, { max: MAX_HOPS }), ' · ', h('span', { className: 'mono' }, stop.ref))
   return banner('error', h('b', null, ctx.t.missingRef), ' · ', h('span', { className: 'mono' }, stop.ref))
 }
 

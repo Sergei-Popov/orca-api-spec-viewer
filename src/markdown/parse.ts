@@ -27,19 +27,68 @@ interface Definition {
   title?: string
 }
 
+// Every pattern here is anchored and has no two neighbouring quantifiers that can match the same
+// characters: descriptions come from the file, and a backtracking pattern on a long run of spaces
+// would freeze the page. Where that is hard to say as a pattern, the code scans by hand.
 const FENCE = /^( {0,3})(`{3,}|~{3,})(.*)$/
-const ATX = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/
 const HR = /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/
 const QUOTE = /^ {0,3}>/
 const QUOTE_STRIP = /^ {0,3}> ?/
 const LIST = /^( {0,3})([*+-]|\d{1,9}[.)])([ \t]+|$)/
 const SETEXT = /^ {0,3}(=+|-+)[ \t]*$/
 const HTML_BLOCK = /^ {0,3}<(?:[A-Za-z][A-Za-z0-9-]*(?:[\s/>]|$)|\/[A-Za-z][A-Za-z0-9-]*\s*>|!--)/
-const TABLE_DELIM = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/
 const DEFINITION = /^ {0,3}\[((?:[^\]\\]|\\.){1,999})\]:[ \t]*(?:<([^>\n]*)>|(\S+))(?:[ \t]+(?:"([^"]*)"|'([^']*)'|\(([^)]*)\)))?[ \t]*$/
 const MAX_DEPTH = 24
+/** Emphasis nested deeper than this stays text: the renderer and plain-text walks recurse. */
+const MAX_EMPHASIS = 32
+/** A table with more columns is a paragraph; past MAX_CELLS short rows are not padded. */
+const MAX_COLUMNS = 64
+const MAX_CELLS = 20_000
 
-const isBlank = (line: string) => /^[ \t]*$/.test(line)
+const isSpaceOrTab = (c: string | undefined) => c === ' ' || c === '\t'
+
+function isBlank(line: string): boolean {
+  for (let i = 0; i < line.length; i++) if (!isSpaceOrTab(line[i])) return false
+  return true
+}
+
+/** `line` without trailing spaces and tabs. */
+function trimEndSpaces(line: string): string {
+  let end = line.length
+  while (end > 0 && isSpaceOrTab(line[end - 1])) end--
+  return end === line.length ? line : line.slice(0, end)
+}
+
+/** An ATX heading: up to three spaces, one to six `#`, then the text without a closing `#` run. */
+export function atxHeading(line: string): { level: number; text: string } | null {
+  let i = 0
+  while (i < 3 && line[i] === ' ') i++
+  let level = 0
+  while (line[i + level] === '#') level++
+  if (level < 1 || level > 6) return null
+  let start = i + level
+  if (start < line.length && !isSpaceOrTab(line[start])) return null
+  let end = line.length
+  while (end > start && isSpaceOrTab(line[end - 1])) end--
+  let hashes = end
+  while (hashes > start && line[hashes - 1] === '#') hashes--
+  if (hashes < end && (hashes === start || isSpaceOrTab(line[hashes - 1]))) {
+    end = hashes
+    while (end > start && isSpaceOrTab(line[end - 1])) end--
+  }
+  while (start < end && isSpaceOrTab(line[start])) start++
+  return { level, text: line.slice(start, end) }
+}
+
+/** A table's delimiter row: cells of `-` with optional `:` at either end, split by `|`. */
+function isTableDelimiter(line: string): boolean {
+  if (indentOf(line) > 3) return false
+  let row = line.trim()
+  if (row.startsWith('|')) row = row.slice(1)
+  if (row.endsWith('|')) row = row.slice(0, -1)
+  if (row.trim() === '') return false
+  return row.split('|').every((cell) => /^:?-+:?$/.test(cell.trim()))
+}
 
 function indentOf(line: string): number {
   let n = 0
@@ -144,8 +193,9 @@ class BlockParser {
         out.push({ t: 'code', lang: m[3].trim().split(/\s+/)[0] ?? '', v: code.join('\n') })
         continue
       }
-      if ((m = ATX.exec(line))) {
-        out.push({ t: 'h', level: m[1].length, c: this.inline.parse(m[2] ?? '') })
+      const atx = atxHeading(line)
+      if (atx) {
+        out.push({ t: 'h', level: atx.level, c: this.inline.parse(atx.text) })
         i++
         continue
       }
@@ -179,10 +229,10 @@ class BlockParser {
         out.push(...this.htmlBlock(html.join('\n')))
         continue
       }
-      if (line.includes('|') && i + 1 < lines.length && TABLE_DELIM.test(lines[i + 1])) {
+      if (line.includes('|') && i + 1 < lines.length && isTableDelimiter(lines[i + 1])) {
         const head = splitRow(line)
         const delims = splitRow(lines[i + 1])
-        if (head.length === delims.length) {
+        if (head.length === delims.length && head.length <= MAX_COLUMNS) {
           i = this.table(lines, i, head, delims, out)
           continue
         }
@@ -203,7 +253,7 @@ class BlockParser {
         para.push(l)
         i++
       }
-      const text = para.map((l) => l.replace(/^[ \t]+/, '')).join('\n').replace(/[ \t]+$/, '')
+      const text = trimEndSpaces(para.map((l) => l.replace(/^[ \t]+/, '')).join('\n'))
       out.push(heading ? { t: 'h', level: heading, c: this.inline.parse(text) } : { t: 'p', c: this.inline.parse(text) })
     }
     return out
@@ -214,7 +264,7 @@ class BlockParser {
     if (indentOf(line) >= 4) return false
     const f = FENCE.exec(line)
     if (f && !(f[2][0] === '`' && f[3].includes('`'))) return true
-    if (ATX.test(line) || HR.test(line) || QUOTE.test(line)) return true
+    if (atxHeading(line) || HR.test(line) || QUOTE.test(line)) return true
     const m = LIST.exec(line)
     if (m && line.slice(m[0].length).trim() !== '') {
       // An ordered list interrupts a paragraph only when it starts at 1.
@@ -289,10 +339,14 @@ class BlockParser {
     })
     const rows: Inline[][][] = []
     let i = start + 2
+    let count = head.length
     while (i < lines.length && !isBlank(lines[i]) && !this.interrupts(lines[i])) {
       const cells = splitRow(lines[i])
       const row: Inline[][] = []
-      for (let c = 0; c < head.length; c++) row.push(this.inline.parse(cells[c] ?? ''))
+      // Short rows get empty cells, as in GFM, until the table is large; then only their own.
+      const width = count < MAX_CELLS ? head.length : Math.min(head.length, cells.length)
+      for (let c = 0; c < width; c++) row.push(c < cells.length ? this.inline.parse(cells[c]) : [])
+      count += width
       rows.push(row)
       i++
     }
@@ -302,11 +356,7 @@ class BlockParser {
 
   /** HTML is never rendered: its tags go, its text stays, block tags and `<br>` break lines. */
   private htmlBlock(html: string): Block[] {
-    const text = html
-      .replace(/<(script|style)\b[\s\S]*?<\/\1\s*>/gi, '')
-      .replace(/<!--[\s\S]*?-->/g, '')
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<\/?(?:p|div|li|tr|h[1-6]|ul|ol|table|thead|tbody|blockquote|pre|hr|details|summary|section|dl|dt|dd)\b[^>]*>/gi, '\n')
+    const text = replaceBlockTags(removeComments(removeElements(html, ['script', 'style']))).replace(/<br\s*\/?>/gi, '\n')
     const out: Block[] = []
     for (const chunk of text.split(/\n[ \t]*\n/)) {
       const lines = chunk.split('\n').map((l) => l.trim()).filter((l) => l !== '')
@@ -320,6 +370,69 @@ class BlockParser {
     }
     return out
   }
+}
+
+/**
+ * `<script>…</script>` and `<style>…</style>` with their content. Scans forward with indexOf: once
+ * no closing tag is left, no later opening tag can have one either.
+ */
+function removeElements(html: string, names: string[]): string {
+  let out = html
+  for (const name of names) {
+    const lower = out.toLowerCase()
+    const open = new RegExp(`<${name}\\b`, 'g')
+    const parts: string[] = []
+    let at = 0
+    for (let m = open.exec(lower); m; m = open.exec(lower)) {
+      const close = lower.indexOf(`</${name}`, m.index)
+      if (close < 0) break
+      let end = close + name.length + 2
+      while (end < lower.length && /\s/.test(lower[end])) end++
+      if (lower[end] !== '>') {
+        open.lastIndex = close + 1
+        continue
+      }
+      parts.push(out.slice(at, m.index))
+      at = end + 1
+      open.lastIndex = at
+    }
+    parts.push(out.slice(at))
+    out = parts.join('')
+  }
+  return out
+}
+
+function removeComments(html: string): string {
+  const parts: string[] = []
+  let at = 0
+  for (;;) {
+    const open = html.indexOf('<!--', at)
+    if (open < 0) break
+    const close = html.indexOf('-->', open + 4)
+    if (close < 0) break
+    parts.push(html.slice(at, open))
+    at = close + 3
+  }
+  parts.push(html.slice(at))
+  return parts.join('')
+}
+
+const BLOCK_TAG = /<\/?(?:p|div|li|tr|h[1-6]|ul|ol|table|thead|tbody|blockquote|pre|hr|details|summary|section|dl|dt|dd)\b/gi
+
+/** Block-level tags become line breaks. A tag runs to the next `>`; with none left, it stays. */
+function replaceBlockTags(html: string): string {
+  const parts: string[] = []
+  let at = 0
+  BLOCK_TAG.lastIndex = 0
+  for (let m = BLOCK_TAG.exec(html); m; m = BLOCK_TAG.exec(html)) {
+    const end = html.indexOf('>', m.index)
+    if (end < 0) break
+    parts.push(html.slice(at, m.index), '\n')
+    at = end + 1
+    BLOCK_TAG.lastIndex = at
+  }
+  parts.push(html.slice(at))
+  return parts.join('')
 }
 
 function hasInnerBlank(lines: string[]): boolean {
@@ -361,7 +474,8 @@ function splitRow(line: string): string[] {
 
 // Inlines --------------------------------------------------------------------------------------
 
-type Delim = { kind: 'delim'; ch: '*' | '_' | '~'; count: number; open: boolean; close: boolean }
+/** `orig`: the length of the whole run, for the rule of three. */
+type Delim = { kind: 'delim'; ch: '*' | '_' | '~'; count: number; orig: number; open: boolean; close: boolean }
 type Tok = { kind: 'node'; node: Inline } | Delim
 
 const ASCII_PUNCT = /[!-/:-@[-`{-~]/
@@ -370,7 +484,6 @@ const isWs = (c: string) => c === '' || /\s/.test(c)
 const isPunct = (c: string) => c !== '' && PUNCT.test(c)
 const AUTOLINK = /^<([a-zA-Z][a-zA-Z0-9+.-]{1,31}:[^\s<>]*)>/
 const EMAIL = /^<([a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*)>/
-const HTML_TAG = /^(?:<\/?[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][\w:.-]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?)*\s*\/?>|<!--[\s\S]*?-->)/
 const ENTITY = /^&(?:#[xX]([0-9a-fA-F]{1,6})|#([0-9]{1,7})|([A-Za-z][A-Za-z0-9]{1,31}));/
 const BARE_URL = /^(?:https?:\/\/|www\.)[^\s<]+/i
 const NAMED: Record<string, string> = {
@@ -424,29 +537,163 @@ function unescapePunctuation(text: string): string {
 }
 
 function trimUrl(url: string): string {
+  let open = 0
+  let close = 0
+  for (let k = 0; k < url.length; k++) {
+    if (url[k] === '(') open++
+    else if (url[k] === ')') close++
+  }
   let end = url.length
-  for (;;) {
+  while (end > 0) {
     const c = url[end - 1]
     if ('?!.,:*_~\'"'.includes(c)) {
       end--
       continue
     }
-    if (c === ')') {
-      const body = url.slice(0, end)
-      const open = (body.match(/\(/g) ?? []).length
-      const close = (body.match(/\)/g) ?? []).length
-      if (close > open) {
-        end--
+    if (c === ')' && close > open) {
+      close--
+      end--
+      continue
+    }
+    if (c === ';') {
+      // A trailing entity reference such as `&amp;` goes as a whole.
+      let k = end - 1
+      while (k > 0 && /[a-zA-Z0-9]/.test(url[k - 1])) k--
+      if (k < end - 1 && k > 0 && url[k - 1] === '&') {
+        for (let n = k - 1; n < end; n++) {
+          if (url[n] === '(') open--
+          else if (url[n] === ')') close--
+        }
+        end = k - 1
         continue
       }
-    }
-    if (c === ';' && /&[a-zA-Z0-9]+;$/.test(url.slice(0, end))) {
-      end = url.slice(0, end).lastIndexOf('&')
-      continue
     }
     break
   }
   return url.slice(0, end)
+}
+
+/**
+ * `indexOf` for many searches that move forward through one text: a search that found nothing
+ * from some point finds nothing from any later point, so long unclosed runs cost one scan in all.
+ */
+class Finder {
+  private readonly found = new Map<string, { from: number; at: number }>()
+  constructor(private readonly src: string) {}
+
+  next(needle: string, from: number): number {
+    const last = this.found.get(needle)
+    if (last && from >= last.from && (last.at < 0 || from <= last.at)) return last.at
+    const at = this.src.indexOf(needle, from)
+    this.found.set(needle, { from, at })
+    return at
+  }
+}
+
+/** The end of an inline HTML tag or comment that starts at `start`, or -1. */
+function htmlTagEnd(src: string, start: number, find: Finder): number {
+  if (src.startsWith('<!--', start)) {
+    const close = find.next('-->', start + 4)
+    return close < 0 || close - start > 2048 ? -1 : close + 3
+  }
+  const limit = Math.min(src.length, start + 2048)
+  let i = start + 1
+  const closing = src[i] === '/'
+  if (closing) i++
+  if (!/[A-Za-z]/.test(src[i] ?? '')) return -1
+  i++
+  while (i < limit && /[A-Za-z0-9-]/.test(src[i])) i++
+  const skip = () => {
+    const from = i
+    while (i < limit && /\s/.test(src[i])) i++
+    return i - from
+  }
+  if (closing) {
+    skip()
+    return src[i] === '>' ? i + 1 : -1
+  }
+  for (;;) {
+    const space = skip()
+    if (src[i] === '>') return i + 1
+    if (src[i] === '/' && src[i + 1] === '>') return i + 2
+    if (space === 0 || i >= limit || !/[A-Za-z_:]/.test(src[i])) return -1
+    i++
+    while (i < limit && /[\w:.-]/.test(src[i])) i++
+    const afterName = i
+    skip()
+    if (src[i] !== '=') {
+      i = afterName
+      continue
+    }
+    i++
+    skip()
+    const q = src[i]
+    if (q === '"' || q === "'") {
+      const close = find.next(q, i + 1)
+      if (close < 0 || close >= limit) return -1
+      i = close + 1
+    } else {
+      const from = i
+      while (i < limit && !/[\s"'=<>`]/.test(src[i])) i++
+      if (i === from) return -1
+    }
+  }
+}
+
+/**
+ * The `]` that closes each `[`, skipping escapes and code spans, in one pass with a stack: -1 when
+ * unclosed or when the label would be longer than 4000 characters.
+ */
+function bracketMatches(src: string, ticks: Backticks): Map<number, number> {
+  const matches = new Map<number, number>()
+  const stack: number[] = []
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i]
+    if (c === '\\') i++
+    else if (c === '`') {
+      let run = 1
+      while (src[i + run] === '`') run++
+      const close = ticks.find(i + run, run)
+      i = close >= 0 ? close + run - 1 : i + run - 1
+    } else if (c === '[') stack.push(i)
+    else if (c === ']' && stack.length > 0) {
+      const open = stack.pop()!
+      if (i - open < 4000) matches.set(open, i)
+    }
+  }
+  return matches
+}
+
+/** Backtick runs by length, found once, so each code span looks up its closing run directly. */
+class Backticks {
+  private runs: Map<number, number[]> | null = null
+  constructor(private readonly src: string) {}
+
+  /** The first run of exactly `run` backticks at or after `from`, or -1. */
+  find(from: number, run: number): number {
+    if (!this.runs) {
+      this.runs = new Map()
+      let i = this.src.indexOf('`')
+      while (i >= 0) {
+        let n = 1
+        while (this.src[i + n] === '`') n++
+        const list = this.runs.get(n)
+        if (list) list.push(i)
+        else this.runs.set(n, [i])
+        i = this.src.indexOf('`', i + n)
+      }
+    }
+    const list = this.runs.get(run)
+    if (!list) return -1
+    let lo = 0
+    let hi = list.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (list[mid] < from) lo = mid + 1
+      else hi = mid
+    }
+    return lo < list.length ? list[lo] : -1
+  }
 }
 
 export class InlineParser {
@@ -454,10 +701,19 @@ export class InlineParser {
 
   parse(src: string, depth = 0): Inline[] {
     const toks: Tok[] = []
-    let text = ''
+    const scan: Scan = { find: new Finder(src), ticks: new Backticks(src), brackets: null }
+    // Text so far, as pieces: a space is always a piece of its own, so trailing spaces are
+    // counted and dropped at a line break without looking at (or copying) the whole text.
+    const buf: string[] = []
+    let spaces = 0
+    const add = (piece: string) => {
+      buf.push(piece)
+      spaces = piece === ' ' ? spaces + 1 : 0
+    }
     const flush = () => {
-      if (text) toks.push({ kind: 'node', node: { t: 'text', v: text } })
-      text = ''
+      if (buf.length > 0) toks.push({ kind: 'node', node: { t: 'text', v: buf.join('') } })
+      buf.length = 0
+      spaces = 0
     }
     const push = (node: Inline) => {
       flush()
@@ -473,10 +729,10 @@ export class InlineParser {
           i += 2
           while (src[i] === ' ') i++
         } else if (ASCII_PUNCT.test(n)) {
-          text += n
+          add(n)
           i += 2
         } else {
-          text += c
+          add(c)
           i++
         }
         continue
@@ -484,9 +740,9 @@ export class InlineParser {
       if (c === '`') {
         let run = 1
         while (src[i + run] === '`') run++
-        const close = findBackticks(src, i + run, run)
+        const close = scan.ticks.find(i + run, run)
         if (close < 0) {
-          text += '`'.repeat(run)
+          add('`'.repeat(run))
           i += run
           continue
         }
@@ -500,7 +756,7 @@ export class InlineParser {
         let run = 1
         while (src[i + run] === c) run++
         if (c === '~' && run !== 2) {
-          text += c.repeat(run)
+          add(c.repeat(run))
           i += run
           continue
         }
@@ -515,12 +771,12 @@ export class InlineParser {
           close = right && (!left || isPunct(after))
         }
         flush()
-        toks.push({ kind: 'delim', ch: c, count: run, open, close })
+        toks.push({ kind: 'delim', ch: c, count: run, orig: run, open, close })
         i += run
         continue
       }
       if (c === '!' && src[i + 1] === '[') {
-        const link = this.link(src, i + 1, true, depth)
+        const link = this.link(src, i + 1, true, depth, scan)
         if (link) {
           push(link.node)
           i = link.end
@@ -528,7 +784,7 @@ export class InlineParser {
         }
       }
       if (c === '[') {
-        const link = this.link(src, i, false, depth)
+        const link = this.link(src, i, false, depth, scan)
         if (link) {
           push(link.node)
           i = link.end
@@ -549,10 +805,10 @@ export class InlineParser {
           i += email[0].length
           continue
         }
-        const tag = HTML_TAG.exec(head)
-        if (tag) {
-          if (/^<br\s*\/?>$/i.test(tag[0])) push({ t: 'br' })
-          i += tag[0].length
+        const end = htmlTagEnd(src, i, scan.find)
+        if (end > 0) {
+          if (/^<br\s*\/?>$/i.test(src.slice(i, end))) push({ t: 'br' })
+          i = end
           continue
         }
       }
@@ -560,16 +816,18 @@ export class InlineParser {
         const m = ENTITY.exec(src.slice(i, i + 40))
         const decoded = m ? decodeEntity(m) : null
         if (m && decoded !== null) {
-          text += decoded
+          add(decoded)
+          spaces = 0
           i += m[0].length
           continue
         }
       }
       if (c === '\n') {
-        const hard = / {2,}$/.test(text)
-        text = text.replace(/ +$/, '')
+        const hard = spaces >= 2
+        buf.length -= spaces
+        spaces = 0
         if (hard) push({ t: 'br' })
-        else text += ' '
+        else add(' ')
         i++
         while (src[i] === ' ') i++
         continue
@@ -585,30 +843,31 @@ export class InlineParser {
           }
         }
       }
-      text += c
+      add(c)
       i++
     }
     flush()
     return emphasis(toks)
   }
 
-  private link(src: string, start: number, image: boolean, depth: number): { node: Inline; end: number } | null {
-    const close = matchBracket(src, start)
+  private link(src: string, start: number, image: boolean, depth: number, scan: Scan): { node: Inline; end: number } | null {
+    scan.brackets ??= bracketMatches(src, scan.ticks)
+    const close = scan.brackets.get(start) ?? -1
     if (close < 0) return null
     const label = src.slice(start + 1, close)
     const make = (href: string, title?: string): Inline =>
       image
-        ? { t: 'image', src: href, alt: plainText(this.parse(label, depth + 1)) }
+        ? { t: 'image', src: href, alt: depth > 3 ? label : plainText(this.parse(label, depth + 1)) }
         : { t: 'link', href, title, c: depth > 3 ? [{ t: 'text', v: label }] : this.parse(label, depth + 1) }
     const j = close + 1
     if (src[j] === '(') {
-      const dest = destination(src, j + 1)
+      const dest = destination(src, j + 1, scan.find)
       if (dest) return { node: make(dest.href, dest.title), end: dest.end }
     }
     let ref = label
     let end = j
     if (src[j] === '[') {
-      const c2 = src.indexOf(']', j + 1)
+      const c2 = scan.find.next(']', j + 1)
       if (c2 >= 0 && c2 - j < 1000) {
         const second = src.slice(j + 1, c2)
         if (second.trim()) ref = second
@@ -620,44 +879,14 @@ export class InlineParser {
   }
 }
 
-function findBackticks(src: string, from: number, run: number): number {
-  let i = from
-  while (i < src.length) {
-    const at = src.indexOf('`', i)
-    if (at < 0) return -1
-    let n = 1
-    while (src[at + n] === '`') n++
-    if (n === run) return at
-    i = at + n
-  }
-  return -1
-}
-
-/** The `]` that closes the `[` at `start`, skipping escapes and code spans. */
-function matchBracket(src: string, start: number): number {
-  let depth = 0
-  const limit = Math.min(src.length, start + 4000)
-  for (let i = start; i < limit; i++) {
-    const c = src[i]
-    if (c === '\\') {
-      i++
-    } else if (c === '`') {
-      let run = 1
-      while (src[i + run] === '`') run++
-      const close = findBackticks(src, i + run, run)
-      if (close >= 0) i = close + run - 1
-      else i += run - 1
-    } else if (c === '[') depth++
-    else if (c === ']') {
-      depth--
-      if (depth === 0) return i
-    }
-  }
-  return -1
+interface Scan {
+  find: Finder
+  ticks: Backticks
+  brackets: Map<number, number> | null
 }
 
 /** `(href "title")` after a link's text; `start` is just past the `(`. */
-function destination(src: string, start: number): { href: string; title?: string; end: number } | null {
+function destination(src: string, start: number, find: Finder): { href: string; title?: string; end: number } | null {
   let i = start
   const skip = () => {
     while (i < src.length && (src[i] === ' ' || src[i] === '\t' || src[i] === '\n')) i++
@@ -665,8 +894,10 @@ function destination(src: string, start: number): { href: string; title?: string
   skip()
   let href = ''
   if (src[i] === '<') {
-    const close = src.indexOf('>', i + 1)
-    if (close < 0 || src.slice(i + 1, close).includes('\n')) return null
+    const close = find.next('>', i + 1)
+    if (close < 0) return null
+    const newline = find.next('\n', i + 1)
+    if (newline >= 0 && newline < close) return null
     href = src.slice(i + 1, close)
     i = close + 1
   } else {
@@ -693,7 +924,7 @@ function destination(src: string, start: number): { href: string; title?: string
   const q = src[i]
   if (q === '"' || q === "'" || q === '(') {
     const closeChar = q === '(' ? ')' : q
-    const close = src.indexOf(closeChar, i + 1)
+    const close = find.next(closeChar, i + 1)
     if (close < 0) return null
     title = src.slice(i + 1, close)
     i = close + 1
@@ -703,43 +934,114 @@ function destination(src: string, start: number): { href: string; title?: string
   return { href, title, end: i + 1 }
 }
 
-/** CommonMark's delimiter algorithm for `*`, `_` and `~~`. */
-function emphasis(toks: Tok[]): Inline[] {
-  for (let ci = 0; ci < toks.length; ci++) {
-    const closer = toks[ci]
-    if (closer.kind !== 'delim' || !closer.close || closer.count === 0) continue
-    let oi = ci - 1
-    for (; oi >= 0; oi--) {
-      const o = toks[oi]
-      if (o.kind !== 'delim' || o.ch !== closer.ch || !o.open || o.count === 0) continue
-      // The rule of three: `*foo**bar*` must not pair `*` with `**`.
-      if (o.ch !== '~' && (o.close || closer.open) && (o.count + closer.count) % 3 === 0 && !(o.count % 3 === 0 && closer.count % 3 === 0)) continue
-      break
-    }
-    if (oi < 0) continue
-    const opener = toks[oi] as Delim
-    const use = closer.ch === '~' ? 2 : opener.count >= 2 && closer.count >= 2 ? 2 : 1
-    const node: Inline = { t: closer.ch === '~' ? 'del' : use === 2 ? 'strong' : 'em', c: flatten(toks.slice(oi + 1, ci)) }
-    opener.count -= use
-    closer.count -= use
-    toks.splice(oi + 1, ci - oi - 1, { kind: 'node', node })
-    let nodeAt = oi + 1
-    if (opener.count === 0) {
-      toks.splice(oi, 1)
-      nodeAt--
-    }
-    if (closer.count === 0) toks.splice(nodeAt + 1, 1)
-    // The loop moves on to the closer again when it has delimiters left.
-    ci = nodeAt
-  }
-  return flatten(toks)
+/** An opening delimiter run still waiting for its closer, and what has come after it. */
+interface Frame {
+  id: number
+  delim: Delim
+  items: Inline[]
+  /** The deepest emphasis among `items`. */
+  depth: number
 }
 
-function flatten(toks: Tok[]): Inline[] {
-  const out: Inline[] = []
+/** Open runs kept at once; past this the oldest one becomes text. */
+const MAX_OPEN = 64
+const depthOf = new WeakMap<Inline, number>()
+
+function pushAll(target: Inline[], items: Inline[]): void {
+  for (const item of items) target.push(item)
+}
+
+/**
+ * CommonMark's delimiter algorithm for `*`, `_` and `~~`, over a stack of open runs. A closer looks
+ * down the stack for an opener, but never below where the last failed search for its kind stopped
+ * (CommonMark's `openers_bottom`); every item is moved at most once, so the pass is linear.
+ * Emphasis that would nest deeper than MAX_EMPHASIS is not made: its delimiters stay text.
+ */
+function emphasis(toks: Tok[]): Inline[] {
+  const root = { items: [] as Inline[], depth: 0 }
+  const stack: Frame[] = []
+  const bottom = new Map<string, number>()
+  let ids = 0
+  const top = () => (stack.length > 0 ? stack[stack.length - 1] : root)
+  const add = (into: { items: Inline[]; depth: number }, node: Inline) => {
+    into.items.push(node)
+    into.depth = Math.max(into.depth, depthOf.get(node) ?? 0)
+  }
+  const asText = (delim: Delim): Inline | null => (delim.count > 0 ? { t: 'text', v: delim.ch.repeat(delim.count) } : null)
+  /** Frames from `from` up, in order, as text and items appended to `into`. */
+  const collapse = (into: { items: Inline[]; depth: number }, from: number) => {
+    for (const frame of stack.splice(from)) {
+      const marks = asText(frame.delim)
+      if (marks) into.items.push(marks)
+      pushAll(into.items, frame.items)
+      into.depth = Math.max(into.depth, frame.depth)
+    }
+  }
   for (const tok of toks) {
-    const node: Inline | null = tok.kind === 'node' ? tok.node : tok.count > 0 ? { t: 'text', v: tok.ch.repeat(tok.count) } : null
-    if (!node) continue
+    if (tok.kind === 'node') {
+      add(top(), tok.node)
+      continue
+    }
+    const closer = tok
+    while (closer.close && closer.count > 0) {
+      const key = `${closer.ch}${closer.open ? 1 : 0}${closer.orig % 3}`
+      const floor = bottom.get(key) ?? -1
+      let at = stack.length - 1
+      for (; at >= 0 && stack[at].id > floor; at--) {
+        const o = stack[at].delim
+        if (o.ch !== closer.ch || o.count === 0) continue
+        // The rule of three: `*foo**bar*` must not pair `*` with `**`.
+        if (o.ch !== '~' && (o.close || closer.open) && (o.orig + closer.orig) % 3 === 0 && !(o.orig % 3 === 0 && closer.orig % 3 === 0)) continue
+        break
+      }
+      if (at < 0 || stack[at].id <= floor) {
+        bottom.set(key, stack.length > 0 ? stack[stack.length - 1].id : -1)
+        break
+      }
+      let depth = stack[at].depth
+      for (let k = at + 1; k < stack.length; k++) depth = Math.max(depth, stack[k].depth)
+      if (depth + 1 > MAX_EMPHASIS) break
+      const frame = stack[at]
+      // Runs between the opener and the closer can no longer match: they become text.
+      collapse(frame, at + 1)
+      const opener = frame.delim
+      const use = closer.ch === '~' ? 2 : opener.count >= 2 && closer.count >= 2 ? 2 : 1
+      opener.count -= use
+      closer.count -= use
+      const node: Inline = { t: closer.ch === '~' ? 'del' : use === 2 ? 'strong' : 'em', c: flatten(frame.items) }
+      depthOf.set(node, depth + 1)
+      if (opener.count > 0) {
+        frame.items = [node]
+        frame.depth = depth + 1
+      } else {
+        stack.pop()
+        add(top(), node)
+      }
+    }
+    if (closer.count === 0) continue
+    if (closer.open) {
+      if (stack.length >= MAX_OPEN) {
+        // The oldest open run gives up: it and what follows it move to the text before.
+        const oldest = stack[0]
+        stack.shift()
+        const marks = asText(oldest.delim)
+        if (marks) root.items.push(marks)
+        pushAll(root.items, oldest.items)
+        root.depth = Math.max(root.depth, oldest.depth)
+      }
+      stack.push({ id: ids++, delim: closer, items: [], depth: 0 })
+    } else {
+      const marks = asText(closer)
+      if (marks) add(top(), marks)
+    }
+  }
+  collapse(root, 0)
+  return flatten(root.items)
+}
+
+function flatten(nodes: Inline[]): Inline[] {
+  const out: Inline[] = []
+  for (const node of nodes) {
     const last = out[out.length - 1]
     if (node.t === 'text' && last?.t === 'text') out[out.length - 1] = { t: 'text', v: last.v + node.v }
     else out.push(node)

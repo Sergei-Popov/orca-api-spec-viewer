@@ -319,13 +319,18 @@ h3.h { font-size: 13px; margin: 18px 0 8px; font-weight: 600; color: var(--fg); 
 /* Source view */
 .srcwrap { display: flex; flex-direction: column; height: 100%; }
 .srchead { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--soft-border); }
-.srcline { height: 20px; display: flex; font: 12px/20px var(--mono-font); white-space: pre; }
-.srcline .no { width: 64px; flex: none; text-align: right; padding-right: 12px; color: var(--muted-fg); user-select: none; }
-.srcline .tx { flex: 1; min-width: 0; overflow: hidden; text-overflow: clip; padding-right: 12px; }
-.srcline.flag-line { background: color-mix(in srgb, var(--warning) 14%, transparent); }
-.srcline.flag-line.error { background: color-mix(in srgb, var(--error) 14%, transparent); }
-.srcline.cur { box-shadow: inset 3px 0 0 var(--m-post); background: color-mix(in srgb, var(--m-post) 10%, transparent); }
-.srcline .mk { width: 16px; flex: none; display: flex; align-items: center; justify-content: center; }
+.srclist .rows { right: auto; min-width: 100%; font: 12px/20px var(--mono-font); }
+.srcline { --tint: transparent; height: 20px; display: flex; font: 12px/20px var(--mono-font); white-space: pre; tab-size: 8; background: var(--tint); }
+.srcline .no, .srcline .mk { position: sticky; z-index: 1; background: linear-gradient(var(--tint), var(--tint)), var(--bg); }
+.srcline .no { left: 16px; width: 64px; flex: none; text-align: right; padding-right: 12px; color: var(--muted-fg); user-select: none; }
+.srcline .tx { flex: none; padding-right: 12px; }
+.srcline .tx .cut { color: var(--muted-fg); font-style: italic; user-select: none; }
+.srcline .tx .col { outline: 1.5px solid var(--m-post); outline-offset: -1px; border-radius: 2px; background: color-mix(in srgb, var(--m-post) 22%, transparent); }
+.srcline.flag-line { --tint: color-mix(in srgb, var(--warning) 14%, transparent); }
+.srcline.flag-line.error { --tint: color-mix(in srgb, var(--error) 14%, transparent); }
+.srcline.cur { --tint: color-mix(in srgb, var(--m-post) 10%, transparent); }
+.srcline.cur .mk { box-shadow: inset 3px 0 0 var(--m-post); }
+.srcline .mk { left: 0; width: 16px; flex: none; display: flex; align-items: center; justify-content: center; }
 .srcline .mk .icon { width: 12px; height: 12px; }
 .srcline .mk .icon.error { color: var(--error); } .srcline .mk .icon.warning { color: var(--warning); } .srcline .mk .icon.info { color: var(--info); }
 

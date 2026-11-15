@@ -13,13 +13,14 @@ import type { Operation } from '../spec/openapi'
 import { fragmentToPath, isObject, own, parsePointer, str, toPointer } from '../spec/pointer'
 import type { Loc } from '../spec/refs'
 import { ancestorsOf, defaultExpanded, flattenNav, navTree, pageFor, pageIndex, type NavLabels, type NavNode, type NavRow } from '../view/nav'
-import { buildSearchIndex, search, type SearchEntry, type SearchHit } from '../view/search'
+import { buildSearchIndex, searchCounted, type SearchEntry, type SearchHit } from '../view/search'
 import { banner, chip, methodBadge, type PageCtx } from './context'
 import { append, button, clickable, copyText, h, highlight, svg } from './dom'
 import { icons } from './icons'
 import { componentPage, openApiOverview, operationPage, tagPage } from './openapi-pages'
 import { arazzoOverview, asyncComponentPage, asyncOperationPage, asyncOverview, channelPage, notSpecPage, overlayOverview, serverPage, workflowPage } from './other-pages'
 import { VirtualList } from './virtual'
+import { MAX_LINE } from '../parse/lines'
 
 export interface AppHost {
   locale: string
@@ -30,6 +31,8 @@ interface Route {
   key: string
   anchor?: string
   line?: number
+  /** With `line`: the column to show and mark in the source view. */
+  column?: number
   scroll?: number
 }
 
@@ -295,12 +298,12 @@ export class App {
     return this.titles.has(key) || !!this.findOperation(key)
   }
 
-  go(key: string, anchor?: string, line?: number): void {
+  go(key: string, anchor?: string, line?: number, column?: number): void {
     const target = this.resolveKey(key)
     this.history.push({ ...this.route, scroll: this.content.scrollTop })
     if (this.history.length > 200) this.history.shift()
     this.future = []
-    this.route = { key: target.key, anchor: anchor ?? target.anchor, line }
+    this.route = { key: target.key, anchor: anchor ?? target.anchor, line, column }
     this.render()
     this.reveal(target.key, true)
     this.updateBar()
@@ -456,7 +459,7 @@ export class App {
           ' ',
           format(this.t.damagedBody, { line: syntax.line }),
           ' ',
-          clickable(h('a', { className: 'link' }, format(this.t.line, { n: syntax.line })), () => this.go('source', undefined, syntax.line))
+          clickable(h('a', { className: 'link' }, format(this.t.line, { n: syntax.line })), () => this.go('source', undefined, syntax.line, syntax.column))
         )
       )
     }
@@ -481,7 +484,7 @@ export class App {
           h('div', { className: 'big' }, svg(icons.error)),
           h('h1', null, this.t.unreadableTitle),
           h('p', null, first ? `${first.message} (${format(this.t.line, { n: first.line })})` : ''),
-          first ? button('tool on', [svg(icons.code), this.t.source], undefined, () => this.go('source', undefined, first.line)) : null
+          first ? button('tool on', [svg(icons.code), this.t.source], undefined, () => this.go('source', undefined, first.line, first.column)) : null
         )
       )
     }
@@ -758,7 +761,7 @@ export class App {
       ln.addEventListener('click', (event) => {
         event.stopPropagation()
         this.selectedProblem = index
-        this.go('source', undefined, row.line)
+        this.go('source', undefined, row.line, row.column)
         this.problemList.refresh()
       })
       el.append(ln)
@@ -768,7 +771,7 @@ export class App {
       this.problemList.refresh()
       const a = this.analysis
       if (!a?.detection.spec || !isObject(a.parsed.value) || row.problem.path.length === 0) {
-        if (row.line > 0) this.go('source', undefined, row.line)
+        if (row.line > 0) this.go('source', undefined, row.line, row.column)
         return
       }
       const key = pageFor(this.index, row.problem.path)
@@ -789,9 +792,11 @@ export class App {
       if (!prev || compareSeverity(r.problem.severity, prev) < 0) marks.set(r.line, r.problem.severity)
     }
     const current = this.route.line ?? 0
+    const column = this.route.column ?? 0
     const list = new VirtualList<number>({
       rowHeight: 20,
       overscan: 20,
+      className: 'srclist',
       render: (n) => {
         const sev = marks.get(n)
         const row = h('div', { className: `srcline${sev ? ' flag-line ' + sev : ''}${n === current ? ' cur' : ''}` })
@@ -803,21 +808,48 @@ export class App {
           const messages = this.problemRows.filter((r) => r.line === n).map((r) => r.message)
           row.title = messages.join('\n')
         }
-        row.append(mk, h('span', { className: 'no' }, String(n)), h('span', { className: 'tx' }, lines.line(n)))
+        row.append(mk, h('span', { className: 'no' }, String(n)), this.sourceText(n, n === current ? column : 0))
         return row
       }
     })
+    // Rows are as wide as the widest line (cut lines end with a note), so the list scrolls
+    // sideways; the line numbers stay put.
+    list.setWidth(`calc(80px + ${lines.widest(MAX_LINE) + 40}ch)`)
     const count = lines.lineCount
     const numbers = new Array<number>(count)
     for (let i = 0; i < count; i++) numbers[i] = i + 1
-    const head = h('div', { className: 'srchead' }, h('b', null, this.t.source), chip(a.parsed.format.toUpperCase()), h('span', { className: 'sub' }, `${count.toLocaleString(this.host.locale)} lines`), h('span', { className: 'spacer' }), button('tool', svg(icons.close), this.t.closePanel, () => this.back()))
+    const head = h('div', { className: 'srchead' }, h('b', null, this.t.source), chip(a.parsed.format.toUpperCase()), h('span', { className: 'sub' }, this.t.lineCount(count)), h('span', { className: 'spacer' }), button('tool', svg(icons.close), this.t.closePanel, () => this.back()))
     const wrap = h('div', { className: 'srcwrap' }, head, list.el)
     requestAnimationFrame(() => {
       list.setItems(numbers)
       if (current > 0) list.scrollToIndex(current - 1, 'center')
+      const mark = list.el.querySelector<HTMLElement>('.srcline.cur .col')
+      if (mark) list.el.scrollLeft = Math.max(0, mark.offsetLeft - list.el.clientWidth / 2)
     })
     list.setItems(numbers)
     return wrap
+  }
+
+  /**
+   * The text of a source line. A line longer than MAX_LINE shows its first part and a note of how
+   * much is left out, or, when a column past that is to be shown, the part around the column.
+   */
+  private sourceText(n: number, column: number): HTMLElement {
+    const lines = this.analysis!.parsed.lines
+    const tx = h('span', { className: 'tx' })
+    const length = lines.lineLength(n)
+    const at = column - 1
+    let from = 0
+    if (at >= MAX_LINE && length > MAX_LINE) from = Math.max(0, Math.min(at - MAX_LINE / 2, length - MAX_LINE))
+    const to = Math.min(length, from + MAX_LINE)
+    if (from > 0) tx.append(h('span', { className: 'cut' }, this.t.charsBefore(from), ' … '))
+    const text = lines.slice(n, from, to)
+    if (column > 0 && at >= from && at <= to) {
+      const i = at - from
+      tx.append(text.slice(0, i), h('span', { className: 'col' }, text.slice(i, i + 1) || ' '), text.slice(i + 1))
+    } else tx.append(text)
+    if (to < length) tx.append(h('span', { className: 'cut' }, ' … ', this.t.charsAfter(length - to)))
+    return tx
   }
 
   // Search ------------------------------------------------------------------------------------
@@ -832,6 +864,7 @@ export class App {
     const list = h('div', { className: 'hits', role: 'listbox' })
     const foot = h('div', { className: 'pfoot' }, h('span', null, this.t.searchKeys), h('span'))
     let hits: SearchHit[] = []
+    let total = 0
     let selected = 0
     const draw = () => {
       list.replaceChildren()
@@ -865,10 +898,13 @@ export class App {
         })
         list.append(row)
       })
-      foot.lastElementChild!.textContent = this.t.results(hits.length)
+      // The palette shows the best matches; the footer says when there are more.
+      foot.lastElementChild!.textContent = total > hits.length ? this.t.resultsOf(hits.length, total) : this.t.results(hits.length)
     }
     const run = () => {
-      hits = search(entries, input.value)
+      const found = searchCounted(entries, input.value)
+      hits = found.hits
+      total = found.total
       selected = 0
       draw()
     }
@@ -999,7 +1035,7 @@ export class App {
         if (file.size > 50 * 1024 * 1024) throw new Error(formatSize(file.size, this.host.locale))
         const text = await file.text()
         const parsed = parseText(text)
-        if (parsed.value === undefined || parsed.value === null) throw new Error(parsed.issues[0]?.message ?? 'empty')
+        if (parsed.value === undefined || parsed.value === null) throw new Error(parsed.issues[0]?.message || this.t.emptyFile)
         this.documents.set(file.name, parsed.value)
         loaded.push(file.name)
       } catch (error) {

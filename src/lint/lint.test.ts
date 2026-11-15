@@ -1,5 +1,8 @@
 import { assert, test } from 'orca/testing'
 import { analyze } from '../analyze'
+import { problemMessage, stringsFor } from '../i18n'
+import { constraints } from '../spec/schema'
+import { constraintText } from '../ui/schema-view'
 
 /** `rule@line` for each problem, to compare readably. */
 function rules(text: string): string[] {
@@ -224,4 +227,72 @@ test('syntax problems keep their parser wording and line', () => {
   const syntax = a.problems.filter((p) => p.rule === 'syntax')
   assert.ok(syntax.length > 0)
   assert.ok(syntax[0].text && syntax[0].text.length > 0)
+})
+
+test('Arazzo inputs are JSON Schema 2020-12: boolean schemas, type arrays, const and prefixItems', () => {
+  assert.deepEqual(
+    rules(`arazzo: 1.0.1
+info: { title: T, version: "1" }
+sourceDescriptions: [{ name: api, url: ./openapi.yaml, type: openapi }]
+workflows:
+  - workflowId: w
+    inputs:
+      type: object
+      properties:
+        a: true
+        b: false
+        c: { type: array, prefixItems: [{ type: string }], items: false }
+        d: { type: [string, 'null'], const: x }
+        customer:
+          oneOf:
+            - { type: object, properties: { name: { type: string } }, additionalProperties: false }
+    steps:
+      - { stepId: s1, operationId: getPet }
+`),
+    []
+  )
+  // OpenAPI 3.0 keeps its own rules.
+  assert.deepEqual(
+    rules(`openapi: 3.0.3
+info: { title: T, version: "1" }
+paths: {}
+components:
+  schemas:
+    S: { type: object, properties: { a: true } }
+`),
+    ['wrong-type@6']
+  )
+})
+
+test('Russian messages and chips have no English phrases in them', () => {
+  const ru = stringsFor('ru-RU')
+  const en = stringsFor('en')
+  const a = analyze(`openapi: 3.1.0
+info: { title: T, version: "1" }
+paths: {}
+components:
+  schemas:
+    S:
+      type: object
+      required: x
+      minLength: -1
+      multipleOf: 0
+      additionalProperties: 3
+`)
+  const messages = a.problems.filter((p) => p.rule === 'wrong-type').map((p) => problemMessage(ru, p))
+  assert.deepEqual(messages.sort(), [
+    'Ожидается boolean или object, а здесь number.',
+    'Ожидается массив строк, а здесь string.',
+    'Ожидается неотрицательное целое число, а здесь -1.',
+    'Ожидается число больше 0, а здесь 0.'
+  ])
+  assert.ok(a.problems.filter((p) => p.rule === 'wrong-type').some((p) => problemMessage(en, p) === 'Expected array of strings, found string.'))
+  const chips = constraints({ minLength: 1, maxItems: 3, minProperties: 2, minContains: 1, uniqueItems: true }).map((c) => constraintText(c, ru.constraintWords))
+  assert.deepEqual(chips, ['длина ≥ 1', 'элементов ≤ 3', 'свойств ≥ 2', 'совпадений ≥ 1', 'без повторов'])
+  assert.equal(ru.lineCount(5), '5 строк')
+  assert.equal(ru.resultsOf(200, 1379), `200 из ${(1379).toLocaleString('ru')} результатов`)
+  assert.equal(en.resultsOf(200, 1379), '200 of 1,379 results')
+  // Every key of the English table has a Russian one of the same kind.
+  for (const key of Object.keys(en) as (keyof typeof en)[]) assert.equal(typeof ru[key], typeof en[key], key)
+  for (const rule of Object.keys(en.messagesByRule)) assert.ok(rule in ru.messagesByRule, rule)
 })

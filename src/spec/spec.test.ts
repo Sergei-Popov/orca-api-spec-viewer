@@ -164,7 +164,7 @@ test('code samples for curl, fetch, Python and HTTPie', () => {
   assert.match(python, /requests\.put\(/)
   assert.match(python, /json=\{\n {8}"name": "Rex"/)
   assert.ok(!python.includes('Content-Type'), 'json= sets the content type')
-  assert.match(renderSample('httpie', request), /^http PUT https:[^\n]* \\\n {2}'X-Key:<API_KEY>' \\\n {2}--raw '\{"name":"Rex","tags":\["string"\]\}'$/)
+  assert.match(renderSample('httpie', request), /^http PUT https:[^\n]* \\\n {2}'X-Key:<API_KEY>' \\\n {2}--raw='\{"name":"Rex","tags":\["string"\]\}'$/)
   assert.equal(shellQuote("it's"), `'it'\\''s'`)
   assert.equal(toPython({ a: [true, null, 1.5] }), '{\n    "a": [\n        True,\n        None,\n        1.5,\n    ],\n}')
 })

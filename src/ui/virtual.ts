@@ -33,6 +33,12 @@ export class VirtualList<T> {
     if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => this.schedule()).observe(this.el)
   }
 
+  /** A fixed width for the rows, wider than the list, to scroll sideways. */
+  setWidth(width: string): void {
+    this.rows.style.width = width
+    this.spacer.style.width = width
+  }
+
   get length(): number {
     return this.items.length
   }

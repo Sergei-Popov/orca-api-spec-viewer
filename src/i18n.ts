@@ -82,6 +82,7 @@ const en = {
   searchKeys: '↑ ↓ move · Enter opens · Esc closes',
   searchEmpty: 'Type to search paths, operationIds, summaries, descriptions and schema names.',
   results: enPlural('result', 'results'),
+  resultsOf: (shown: number, total: number) => `${shown.toLocaleString('en')} of ${enPlural('result', 'results')(total)}`,
   kinds: {
     operation: 'Operation',
     webhook: 'Webhook',
@@ -113,6 +114,9 @@ const en = {
   source: 'Source',
   sourceHint: 'Show the file with line numbers',
   lineCol: 'Ln {line}, Col {col}',
+  lineCount: enPlural('line', 'lines'),
+  charsAfter: enPlural('more character', 'more characters'),
+  charsBefore: enPlural('character before', 'characters before'),
   line: 'Line {n}',
   goToLine: 'Show line {n} in the source',
   rootPointer: '(document root)',
@@ -192,9 +196,21 @@ const en = {
   linkTarget: 'Operation',
   callbackExpression: 'Expression',
   pathLevel: 'path',
+  pathLevelHint: 'Declared on the path item: it applies to every operation of the path.',
+  /** Words of the constraint chips under a schema: `length ≥ 3`, `items ≤ 10`, `unique`. */
+  constraintWords: { length: 'length', items: 'items', properties: 'properties', contains: 'contains', unique: 'unique' },
+  /** Phrases the checks name as what was expected (JSON type names stay as they are). */
+  expectedPhrases: {
+    'array of strings': 'array of strings',
+    'non-negative integer': 'non-negative integer',
+    'number > 0': 'number > 0',
+    'boolean or object': 'boolean or object'
+  } as Record<string, string>,
+  emptyFile: 'the file is empty',
   codeSamples: 'Code samples',
   samples: { curl: 'curl', fetch: 'JavaScript', python: 'Python', httpie: 'HTTPie' } as Record<string, string>,
   noNetwork: 'Requests are not sent from here: Orca keeps plugin views offline. Copy a sample and run it where you have access.',
+  samplesBadMethod: 'No code samples: “{method}” is not a valid HTTP method name.',
   placeholderHost: 'The document names no server, so the samples use api.example.com.',
   tryItNote: 'There is no “Try it out”: the view has no network.',
 
@@ -239,6 +255,7 @@ const en = {
   externalRef: 'Defined in another file',
   externalRefIn: '{fragment} in {file}',
   missingRef: 'Not found in this document',
+  refChainTooLong: 'More than {max} references in a row: the viewer stops following them here.',
   loadFile: 'Load referenced file…',
   loadFileHint: 'Choose {file} to show what this reference points to. The file is read here and never sent anywhere.',
   loadedFile: 'Loaded {file}',
@@ -313,6 +330,10 @@ const en = {
   messagesByRule: {
     syntax: '{text}',
     'duplicate-key': 'Duplicate key: the last value wins. {text}',
+    'yaml-alias-cycle': 'The alias *{alias} points back to a value that contains it; it is shown as a reference to that value.',
+    'yaml-alias-limit': 'The YAML aliases stand for more than a million values; *{alias} and the aliases after it are shown as null.',
+    'yaml-documents': 'The file holds more than one YAML document; only the first is shown.',
+    'lint-failed': 'The checks stopped early, so some problems may be missing: {error}',
     'required-field': 'Missing required field “{field}” in {object}.',
     'unknown-field': 'Unknown field “{field}” in {object}.',
     'wrong-type': 'Expected {expected}, found {actual}.',
@@ -325,6 +346,7 @@ const en = {
     'unresolved-ref': 'The reference {ref} does not resolve.',
     'external-ref': 'References into {file}, which is not loaded: {count}.',
     'circular-ref': 'The reference {ref} leads back to itself.',
+    'long-ref-chain': 'The reference {ref} starts a chain of more than {max} references; the viewer stops following it there.',
     'ref-siblings': 'Fields next to $ref are ignored here: {fields}.',
     'duplicate-operation-id': 'operationId “{id}” is already used by {other}.',
     'path-param-undeclared': 'Path parameter “{name}” of {path} is not declared.',
@@ -361,7 +383,8 @@ const en = {
     path: 'A path must start with “/”: “{key}”.',
     'path-query': 'A path must not contain a query string: “{key}”.',
     status: 'Not an HTTP status code: “{key}”.',
-    method: '“{key}” is a standard method; declare it as a field of the path item.'
+    method: '“{key}” is a standard method; declare it as a field of the path item.',
+    'method-token': '“{key}” is not a valid HTTP method name: use letters, digits and !#$%&\'*+-.^_`|~ only.'
   } as Record<string, string>,
   duplicateEnum: 'The value {value} is listed twice.'
 }
@@ -428,6 +451,7 @@ const ru: Strings = {
   searchKeys: '↑ ↓ — выбор · Enter — открыть · Esc — закрыть',
   searchEmpty: 'Начните вводить: поиск идёт по путям, operationId, кратким и полным описаниям и именам схем.',
   results: ruPlural('результат', 'результата', 'результатов'),
+  resultsOf: (shown: number, total: number) => `${shown.toLocaleString('ru')} из ${ruPlural('результата', 'результатов', 'результатов')(total)}`,
   kinds: {
     operation: 'Операция',
     webhook: 'Вебхук',
@@ -459,6 +483,9 @@ const ru: Strings = {
   source: 'Исходник',
   sourceHint: 'Показать файл с номерами строк',
   lineCol: 'Стр. {line}, стлб. {col}',
+  lineCount: ruPlural('строка', 'строки', 'строк'),
+  charsAfter: (n: number) => `ещё ${ruPlural('символ', 'символа', 'символов')(n)}`,
+  charsBefore: (n: number) => `${ruPlural('символ', 'символа', 'символов')(n)} до этого`,
   line: 'Строка {n}',
   goToLine: 'Показать строку {n} в исходнике',
   rootPointer: '(корень документа)',
@@ -538,9 +565,19 @@ const ru: Strings = {
   linkTarget: 'Операция',
   callbackExpression: 'Выражение',
   pathLevel: 'путь',
+  pathLevelHint: 'Объявлен в элементе пути: действует для всех операций этого пути.',
+  constraintWords: { length: 'длина', items: 'элементов', properties: 'свойств', contains: 'совпадений', unique: 'без повторов' },
+  expectedPhrases: {
+    'array of strings': 'массив строк',
+    'non-negative integer': 'неотрицательное целое число',
+    'number > 0': 'число больше 0',
+    'boolean or object': 'boolean или object'
+  },
+  emptyFile: 'файл пуст',
   codeSamples: 'Примеры кода',
   samples: { curl: 'curl', fetch: 'JavaScript', python: 'Python', httpie: 'HTTPie' },
   noNetwork: 'Запросы отсюда не отправляются: Orca не даёт представлениям плагинов доступа к сети. Скопируйте пример и выполните его там, где есть доступ.',
+  samplesBadMethod: 'Примеров кода нет: «{method}» — недопустимое имя метода HTTP.',
   placeholderHost: 'В документе не указан сервер, поэтому в примерах — api.example.com.',
   tryItNote: 'Кнопки «Попробовать» нет: у представления нет сети.',
 
@@ -585,6 +622,7 @@ const ru: Strings = {
   externalRef: 'Определено в другом файле',
   externalRefIn: '{fragment} в {file}',
   missingRef: 'Не найдено в этом документе',
+  refChainTooLong: 'Больше {max} ссылок подряд: дальше просмотр за ними не идёт.',
   loadFile: 'Загрузить файл по ссылке…',
   loadFileHint: 'Выберите {file}, чтобы увидеть, на что указывает ссылка. Файл читается здесь и никуда не отправляется.',
   loadedFile: 'Загружен {file}',
@@ -659,6 +697,10 @@ const ru: Strings = {
   messagesByRule: {
     syntax: '{text}',
     'duplicate-key': 'Повторяющийся ключ: действует последнее значение. {text}',
+    'yaml-alias-cycle': 'Псевдоним *{alias} ссылается на значение, внутри которого стоит; он показан как ссылка на это значение.',
+    'yaml-alias-limit': 'Псевдонимы YAML разворачиваются больше чем в миллион значений; *{alias} и следующие псевдонимы показаны как null.',
+    'yaml-documents': 'В файле несколько документов YAML; показан только первый.',
+    'lint-failed': 'Проверки остановились раньше времени, часть проблем может быть не показана: {error}',
     'required-field': 'Нет обязательного поля «{field}» в {object}.',
     'unknown-field': 'Неизвестное поле «{field}» в {object}.',
     'wrong-type': 'Ожидается {expected}, а здесь {actual}.',
@@ -671,6 +713,7 @@ const ru: Strings = {
     'unresolved-ref': 'Ссылка {ref} никуда не ведёт.',
     'external-ref': 'Ссылок в файл {file}, который не загружен: {count}.',
     'circular-ref': 'Ссылка {ref} ведёт сама на себя.',
+    'long-ref-chain': 'Ссылка {ref} начинает цепочку длиннее {max} ссылок; дальше просмотр за ней не идёт.',
     'ref-siblings': 'Поля рядом с $ref здесь не учитываются: {fields}.',
     'duplicate-operation-id': 'operationId «{id}» уже занят: {other}.',
     'path-param-undeclared': 'Параметр пути «{name}» в {path} не объявлен.',
@@ -707,7 +750,8 @@ const ru: Strings = {
     path: 'Путь должен начинаться с «/»: «{key}».',
     'path-query': 'В пути не должно быть строки запроса: «{key}».',
     status: 'Это не код состояния HTTP: «{key}».',
-    method: '«{key}» — стандартный метод; объявите его полем элемента пути.'
+    method: '«{key}» — стандартный метод; объявите его полем элемента пути.',
+    'method-token': '«{key}» — недопустимое имя метода HTTP: допустимы только буквы, цифры и !#$%&\'*+-.^_`|~.'
   },
   duplicateEnum: 'Значение {value} указано дважды.'
 }
@@ -727,5 +771,6 @@ export function problemMessage(t: Strings, problem: Problem): string {
     return format(t.badKeys[kind] ?? t.badKeys.component, params)
   }
   if (problem.rule === 'invalid-enum' && params.type === 'unique') return format(t.duplicateEnum, params)
+  if (problem.rule === 'wrong-type') params.expected = t.expectedPhrases[String(params.expected)] ?? params.expected
   return format(t.messagesByRule[problem.rule] ?? problem.rule, params).trim()
 }
