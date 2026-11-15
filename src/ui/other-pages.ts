@@ -184,10 +184,12 @@ function messageBox(ctx: PageCtx, model: AsyncApiModel, msg: AsyncMessage, id: s
     body.replaceChildren()
     tools.replaceChildren()
     if (which === 'payload' || which === 'headers') {
-      const raw = which === 'payload' ? payload : headers
-      const loc = which === 'payload' ? payloadLoc : child(msg.loc, 'headers')
-      if (which === 'payload' && shown?.format !== undefined) body.append(formatNote(shown.format))
-      if (which === 'payload' && shown?.source) {
+      // AsyncAPI 3 headers may be a Multi Format Schema Object as well.
+      const part = which === 'payload' ? shown : model.family === 'asyncapi3' ? schemaWithFormat(headers, child(msg.loc, 'headers')) : undefined
+      const raw = which === 'payload' ? payload : (part?.value ?? headers)
+      const loc = which === 'payload' ? payloadLoc : (part?.loc ?? child(msg.loc, 'headers'))
+      if (part?.format !== undefined) body.append(formatNote(part.format))
+      if (part?.source) {
         body.append(...sourceView(ctx, raw, loc, tools))
         return
       }
