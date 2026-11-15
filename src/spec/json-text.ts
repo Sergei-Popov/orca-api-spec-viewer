@@ -3,6 +3,8 @@
 // goes through here instead of `JSON.stringify`, and stops once it has written enough. The text is
 // what `JSON.stringify` would give, up to the cut.
 
+import { wellFormed } from './well-formed'
+
 export interface JsonTextOptions {
   /** Characters to write at most; the text is cut there. */
   maxLength: number
@@ -10,6 +12,8 @@ export interface JsonTextOptions {
   indent?: number
   /** Levels to descend at most; deeper values are cut. */
   maxDepth?: number
+  /** Writes half of a UTF-16 pair as U+FFFD, not as a `\udXXX` escape (text to send, not to show). */
+  wellFormed?: boolean
 }
 
 export interface JsonText {
@@ -29,6 +33,7 @@ export function jsonText(value: unknown, options: JsonTextOptions): JsonText {
   let length = 0
   let cut = false
   const active = new Set<object>()
+  const quote = options.wellFormed ? (s: string) => JSON.stringify(wellFormed(s)) : (s: string) => JSON.stringify(s)
 
   const write = (s: string) => {
     if (length + s.length > max) {
@@ -46,7 +51,7 @@ export function jsonText(value: unknown, options: JsonTextOptions): JsonText {
     switch (typeof v) {
       case 'string':
         // A long string costs only what is written of it.
-        return JSON.stringify(v.length > max - length + 2 ? v.slice(0, max - length + 2) : v)
+        return quote(v.length > max - length + 2 ? v.slice(0, max - length + 2) : v)
       case 'number':
         return Number.isFinite(v) ? String(v) : 'null'
       case 'boolean':
@@ -96,7 +101,7 @@ export function jsonText(value: unknown, options: JsonTextOptions): JsonText {
       for (const key of Object.keys(obj)) {
         const item = obj[key]
         if (item === undefined || typeof item === 'function' || typeof item === 'symbol') continue
-        write((first ? '' : ',') + pad + JSON.stringify(key) + (indent ? ': ' : ':'))
+        write((first ? '' : ',') + pad + quote(key) + (indent ? ': ' : ':'))
         first = false
         visit(item, depth + 1)
       }

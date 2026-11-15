@@ -62,7 +62,8 @@ test('items are encoded before they are joined, so only the separators stay lite
     return [pairs.map(([k, v]) => `${k}=${v}`).join('&'), report]
   }
   assert.deepEqual(enc(p('form', false), ['a', 'b,c']), ['color=a,b%2Cc', { joined: true }])
-  assert.deepEqual(enc(p('pipeDelimited', false), ['a|b', 'c']), ['color=a%7Cb|c', { joined: true }])
+  assert.deepEqual(enc(p('pipeDelimited', false), ['a|b', 'c']), ['color=a%7Cb|c', { joined: true, pipeInItem: true }])
+  assert.deepEqual(enc(p('pipeDelimited', false), ['a', 'b']), ['color=a|b', { joined: true }])
   assert.deepEqual(enc(p('spaceDelimited', false), ['a b', 'c']), ['color=a%20b%20c', {}])
   assert.deepEqual(enc(p('form', true), ['a,b', 'c']), ['color=a%2Cb&color=c', {}])
   assert.deepEqual(enc(p(undefined, undefined, 'csv'), ['a,b', 'c']), ['color=a%2Cb,c', { joined: true }])

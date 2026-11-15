@@ -10,9 +10,10 @@ import type { MediaView, OperationDetails, ParamView } from './operation'
 import { isObject, own, str } from './pointer'
 import type { Refs } from './refs'
 import { isHttpToken } from './token'
+import { loneSurrogate, wellFormed } from './well-formed'
 
 export type SampleLanguage = 'curl' | 'fetch' | 'python' | 'httpie'
-export { isHttpToken }
+export { isHttpToken, wellFormed }
 export const SAMPLE_LANGUAGES: SampleLanguage[] = ['curl', 'fetch', 'python', 'httpie']
 
 export interface FormField {
@@ -47,6 +48,15 @@ export type SampleNoteKey =
   | 'noCurlField'
   | 'noHttpieMethod'
   | 'noHttpieItems'
+  | 'noFetchMethod'
+  | 'clientHeaders'
+  | 'browserHeaders'
+  | 'methodCase'
+  | 'pipeItems'
+  | 'formPlaceholder'
+  | 'formNoFields'
+  | 'fileType'
+  | 'fileParts'
 
 export interface SampleRequest {
   method: string
@@ -86,6 +96,18 @@ const STANDARD_METHODS = ['get', 'put', 'post', 'delete', 'options', 'head', 'pa
 const IGNORED_HEADERS = /^(accept|content-type|authorization)$/i
 /** A header value HTTP cannot carry: a line break or NUL, or spaces at its ends (RFC 9110 §5.5). */
 const UNSENDABLE_VALUE = /[\0\r\n]|^[ \t]|[ \t]$/
+/**
+ * Headers the HTTP client sets itself, for the connection and the length of the message. Copied
+ * into a sample they break the request (a Content-Length that does not match the body) or make
+ * fetch throw (Node.js rejects Transfer-Encoding, Keep-Alive, Upgrade, Expect and Connection).
+ */
+const CLIENT_HEADERS = /^(content-length|transfer-encoding|host|connection|keep-alive|te|trailer|upgrade|expect)$/i
+/** Other headers browsers do not let fetch set (the Fetch standard's forbidden request headers). */
+const BROWSER_HEADERS = /^(accept-charset|accept-encoding|access-control-request-headers|access-control-request-method|cookie2|date|dnt|origin|referer|set-cookie|via|proxy-.*|sec-.*)$/i
+/** Method override headers, which browsers drop when they name a method fetch forbids. */
+const METHOD_OVERRIDE = /^x-(http-)?method(-override)?$/i
+/** Methods the Fetch standard forbids: fetch throws on them, in browsers and in Node.js. */
+const FETCH_FORBIDDEN_METHOD = /^(connect|trace|track)$/i
 
 export function buildRequest(model: OpenApiModel, refs: Refs, op: Operation, details: OperationDetails): SampleRequest {
   const servers = operationServers(model, op).servers
@@ -96,6 +118,8 @@ export function buildRequest(model: OpenApiModel, refs: Refs, op: Operation, det
     base = PLACEHOLDER_HOST + (base.startsWith('/') ? base : base ? '/' + base : '')
   }
   base = base.replace(/\/+$/, '')
+  // Encoding replaces half of a UTF-16 pair in the URL text (see encodeUrlText); said here.
+  const replaced = illFormed(base) || illFormed(op.route)
 
   // Standard methods are lower-case field names; an OpenAPI 3.2 additional operation is keyed by
   // the method exactly as it is sent.
@@ -111,11 +135,14 @@ export function buildRequest(model: OpenApiModel, refs: Refs, op: Operation, det
     response: responseKind(details, method),
     notes: []
   }
+  if (replaced) request.replaced = true
   const notes = request.notes
   const skippedNames: string[] = []
   const skippedValues: string[] = []
   const deep: string[] = []
   const cookies: string[] = []
+  const clientHeaders: string[] = []
+  const pipes: string[] = []
   // The query as each pair is written exactly; used when a pair joins items (see below).
   const exactQuery: string[] = []
   let joined = false
@@ -126,7 +153,7 @@ export function buildRequest(model: OpenApiModel, refs: Refs, op: Operation, det
     if (param.stop) continue
     if (param.in === 'querystring') {
       // OpenAPI 3.2: one parameter that is the whole query string, written as its media type says.
-      const written = querystringOf(refs, param)
+      const written = querystringOf(refs, param, request)
       if (Array.isArray(written)) {
         request.query.push(...written)
         exactQuery.push(...written.map(([name, value]) => `${encodeQueryName(name)}=${encodeComponent(value)}`))
@@ -135,7 +162,10 @@ export function buildRequest(model: OpenApiModel, refs: Refs, op: Operation, det
     }
     // Arrays and objects are written as the parameter's style (or collectionFormat) says; a
     // parameter with `content` as its media type says (JSON: `"text"`, not `text`).
-    const value = contentText(param, paramValue(refs, param))
+    const given = paramValue(refs, param)
+    // Encoding and JSON text replace the half of a pair themselves, so it is noticed here.
+    if (illFormed(given) || illFormed(param.name)) request.replaced = true
+    const value = contentText(param, given)
     const style = styleOf(param)
     if (param.in === 'path') {
       if (value === undefined) continue
@@ -156,11 +186,13 @@ export function buildRequest(model: OpenApiModel, refs: Refs, op: Operation, det
       exactQuery.push(...exact.map(([name, text]) => `${encodeQueryName(name)}=${text}`))
       if (report.joined) joined = true
       if (report.deep) deep.push(param.name)
+      if (report.pipeInItem) pipes.push(param.name)
     } else if (param.in === 'header') {
       const text = value === undefined ? '' : styledHeader(style, value)
       // A name that is not a token cannot be sent; curl would read `@name…` as a file.
       if (!isHttpToken(param.name)) skippedNames.push(param.name)
       else if (IGNORED_HEADERS.test(param.name)) continue
+      else if (CLIENT_HEADERS.test(param.name)) clientHeaders.push(param.name)
       else if (UNSENDABLE_VALUE.test(text)) skippedValues.push(param.name)
       else request.headers.push([param.name, text])
     } else if (param.in === 'cookie') {
@@ -189,8 +221,9 @@ export function buildRequest(model: OpenApiModel, refs: Refs, op: Operation, det
           request.query.push([keyName, '<API_KEY>'])
           exactQuery.push(`${encodeQueryName(keyName)}=<API_KEY>`)
         } else if (where === 'cookie') cookies.push(`${encodeComponent(keyName)}=<API_KEY>`)
-        else if (isHttpToken(keyName)) request.headers.push([keyName, '<API_KEY>'])
-        else skippedNames.push(keyName)
+        else if (!isHttpToken(keyName)) skippedNames.push(keyName)
+        else if (CLIENT_HEADERS.test(keyName)) clientHeaders.push(keyName)
+        else request.headers.push([keyName, '<API_KEY>'])
       } else if (type === 'basic' || (type === 'http' && scheme === 'basic')) {
         request.basicAuth = true
       } else if (type === 'http') {
@@ -228,6 +261,7 @@ export function buildRequest(model: OpenApiModel, refs: Refs, op: Operation, det
   // Items joined with a literal separator (`a,b%2Cc`) are exact only in the URL: requests and
   // HTTPie would encode the separators too. The whole query goes there, so its order is kept.
   if (joined && exactQuery.length > 0) {
+    if (illFormed(request.query)) request.replaced = true
     request.url += (request.url.includes('?') ? '&' : '?') + exactQuery.join('&')
     request.query = []
   }
@@ -250,8 +284,17 @@ export function buildRequest(model: OpenApiModel, refs: Refs, op: Operation, det
   const list = (names: string[]) => ({ names: [...new Set(names)].join(', ') })
   if (skippedNames.length > 0) notes.push({ key: 'headerName', values: list(skippedNames) })
   if (skippedValues.length > 0) notes.push({ key: 'headerValue', values: list(skippedValues) })
+  if (clientHeaders.length > 0) notes.push({ key: 'clientHeaders', values: list(clientHeaders) })
   if (wide.length > 0) notes.push({ key: 'headerAscii', values: list(wide), langs: ['fetch', 'python'] })
   if (request.headers.some(([name]) => name === 'Cookie')) notes.push({ key: 'cookieFetch', langs: ['fetch'] })
+  const browserDrops = request.headers
+    .filter(([name, value]) => BROWSER_HEADERS.test(name) || (METHOD_OVERRIDE.test(name) && value.split(',').some((m) => FETCH_FORBIDDEN_METHOD.test(m.trim()))))
+    .map(([name]) => name)
+  if (browserDrops.length > 0) notes.push({ key: 'browserHeaders', values: list(browserDrops), langs: ['fetch'] })
+  // requests and HTTPie send every method in capitals.
+  if (method !== method.toUpperCase()) notes.push({ key: 'methodCase', values: { upper: method.toUpperCase() }, langs: ['python', 'httpie'] })
+  if (pipes.length > 0) notes.push({ key: 'pipeItems', values: list(pipes), langs: ['python', 'httpie'] })
+  if (request.body?.form?.some((f) => f.file)) notes.push({ key: 'fileParts' })
   if (dotSegment) notes.push({ key: 'dotSegment', langs: ['fetch', 'python', 'httpie'] })
   // FormData sends every line break in a text part as CRLF (the HTML form encoding).
   const parts = request.body?.form && /multipart/i.test(request.body.mediaType) ? request.body.form : []
@@ -282,25 +325,38 @@ function addBody(request: SampleRequest, model: OpenApiModel, refs: Refs, view: 
   }
   if (!view.required && !given && (method === 'GET' || method === 'HEAD')) return
   const example = mediaExample(refs, media)
+  // Form fields and JSON text replace the half of a pair themselves, so it is noticed here.
+  if (illFormed(example)) request.replaced = true
   let body: NonNullable<SampleRequest['body']>
   if (view.formFields.length > 0) {
     // Swagger 2.0 formData parameters, each written as its collectionFormat says.
     const fields: Field[] = view.formFields.flatMap((field): Field[] => {
       if (own(field.raw, 'type') === 'file') return [{ name: field.name, value: FILE_PLACEHOLDER, file: true, exact: FILE_PLACEHOLDER }]
       const value = paramValue(refs, field)
+      if (illFormed(value)) request.replaced = true
       if (value === undefined) return [{ name: field.name, value: '', exact: '' }]
       return styledFields(styleOf(field), value, false)
     })
     body = formBodyOf(media.type, fields)
   } else if (media.itemSchema || SEQUENCES.test(media.type)) {
-    body = sequenceBody(refs, media, notes)
+    body = sequenceBody(refs, media, request)
   } else if (isJsonMedia(media.type)) {
     body = { mediaType: media.type, json: example === undefined ? {} : example }
   } else if (/x-www-form-urlencoded|multipart\/form-data/i.test(media.type)) {
     const form = formFields(refs, media, example, model.family, deep, notes)
+    if (form.length === 0 && view.required) {
+      // The schema is not an object with properties (an array of files, say): the parts have no
+      // names to take. A multipart body gets one file part in their place; a urlencoded one none.
+      if (!/multipart/i.test(media.type)) {
+        notes.push({ key: 'formNoFields' })
+        return
+      }
+      form.push({ name: 'file', value: FILE_PLACEHOLDER, file: true, exact: FILE_PLACEHOLDER })
+      notes.push({ key: 'formPlaceholder' })
+    }
     body = formBodyOf(media.type, form)
   } else {
-    body = { mediaType: media.type, text: typeof example === 'string' ? example : example === undefined ? '' : jsonText(example, { maxLength: MAX_BODY, indent: 2 }).text }
+    body = { mediaType: media.type, text: typeof example === 'string' ? example : example === undefined ? '' : jsonText(example, { maxLength: MAX_BODY, indent: 2, wellFormed: true }).text }
   }
   if (!view.required && isEmptyBody(body)) return
   request.body = body
@@ -348,7 +404,7 @@ function formBodyOf(mediaType: string, fields: Field[]): NonNullable<SampleReque
 const SEQUENCES = /^(application\/(jsonl|x-jsonlines|x-ndjson|ndjson|json-seq)|text\/event-stream)\s*(;|$)/i
 
 /** One item of a sequence, generated from `itemSchema` (or the example the document gives). */
-function sequenceBody(refs: Refs, media: MediaView, notes: SampleNote[]): NonNullable<SampleRequest['body']> {
+function sequenceBody(refs: Refs, media: MediaView, request: SampleRequest): NonNullable<SampleRequest['body']> {
   const given = media.examples.find((e) => e.hasValue)
   if (given && typeof given.value === 'string') return { mediaType: media.type, text: given.value }
   const schema = media.itemSchema ?? media.schema
@@ -358,9 +414,10 @@ function sequenceBody(refs: Refs, media: MediaView, notes: SampleNote[]): NonNul
   else {
     const made = schema && !schema.stop ? exampleFromSchema(refs, schema.value, schema.loc, { mode: 'request' }) : undefined
     items = made === undefined ? [] : [made]
-    if (items.length > 0) notes.push({ key: 'sequence' })
+    if (items.length > 0) request.notes.push({ key: 'sequence' })
   }
-  const line = (item: unknown) => jsonText(item, { maxLength: MAX_BODY }).text
+  if (illFormed(items)) request.replaced = true
+  const line = (item: unknown) => jsonText(item, { maxLength: MAX_BODY, wellFormed: true }).text
   const type = media.type.toLowerCase()
   const text = type.startsWith('text/event-stream')
     ? items.map((item) => `data: ${line(item)}\n\n`).join('')
@@ -393,40 +450,6 @@ function wellFormedValue(value: unknown, depth = 0, active = new WeakSet<object>
     : Object.fromEntries(Object.entries(value).map(([key, item]) => [wellFormed(key), wellFormedValue(item, depth + 1, active)]))
   active.delete(value)
   return out
-}
-
-/**
- * Text with each unpaired UTF-16 surrogate (half of a character, such as from a `\uD83D` escape)
- * replaced by U+FFFD. Such text cannot be encoded as UTF-8: encodeURIComponent throws on it, and a
- * copied sample would lose it anyway.
- */
-export function wellFormed(text: string): string {
-  let out = ''
-  let from = 0
-  for (let i = loneSurrogate(text, 0); i >= 0; i = loneSurrogate(text, from)) {
-    out += text.slice(from, i) + REPLACEMENT
-    from = i + 1
-  }
-  return from === 0 ? text : out + text.slice(from)
-}
-
-const REPLACEMENT = String.fromCharCode(0xfffd)
-
-/** The index of the first unpaired surrogate at or after `from`, or -1. */
-function loneSurrogate(text: string, from: number): number {
-  for (let i = from; i < text.length; i++) {
-    const c = text.charCodeAt(i)
-    if (c < 0xd800 || c > 0xdfff) continue
-    if (c <= 0xdbff) {
-      const next = text.charCodeAt(i + 1)
-      if (next >= 0xdc00 && next <= 0xdfff) {
-        i++
-        continue
-      }
-    }
-    return i
-  }
-  return -1
 }
 
 /** Whether a string, or any string or key in a JSON value, has an unpaired surrogate. */
@@ -485,12 +508,13 @@ function tooLarge(value: unknown): boolean {
  * A querystring parameter's example: name–value pairs for a form-encoded object (each tool encodes
  * them), or the query string itself, from an example's serializedValue or percent-encoded.
  */
-function querystringOf(refs: Refs, param: ParamView): [string, string][] | string | undefined {
+function querystringOf(refs: Refs, param: ParamView, request: SampleRequest): [string, string][] | string | undefined {
   const media = param.content[0]
   const serialized = [...param.examples, ...(media?.examples ?? [])].find((e) => e.serializedValue !== undefined)?.serializedValue
   if (serialized !== undefined) return serialized.replace(/^\?/, '')
   const value = paramValue(refs, param) ?? (media ? mediaExample(refs, media) : undefined)
   if (value === undefined || value === null) return undefined
+  if (illFormed(value)) request.replaced = true
   if (media && /x-www-form-urlencoded/i.test(media.type) && isObject(value)) {
     // As a form is encoded: an array repeats its name.
     return Object.keys(value).flatMap((name) => {
@@ -544,7 +568,7 @@ function paramValue(refs: Refs, param: ParamView): unknown {
 
 /** Compact JSON for a parameter or form value, with a size cap. */
 function compact(value: unknown): string {
-  return jsonText(value, { maxLength: 4000 }).text
+  return jsonText(value, { maxLength: 4000, wellFormed: true }).text
 }
 
 function isBinary(schema: unknown): boolean {
@@ -563,6 +587,7 @@ function formFields(refs: Refs, media: MediaView, example: unknown, family: Open
   const fields: Field[] = []
   const typed: string[] = []
   const withHeaders: string[] = []
+  const fileTyped: string[] = []
   const schema = media.schema && !media.schema.stop ? refs.follow(media.schema.value, media.schema.loc).value : undefined
   const props = isObject(schema) && isObject(schema.properties) ? schema.properties : {}
   const values = isObject(example) ? example : {}
@@ -571,13 +596,18 @@ function formFields(refs: Refs, media: MediaView, example: unknown, family: Open
   for (const name of names) {
     const prop = refs.follow(props[name], { doc: '', path: [] }).value
     const items = isObject(prop) && prop.type === 'array' ? refs.follow(prop.items, { doc: '', path: [] }).value : undefined
+    const encoding = isObject(encodings[name]) ? encodings[name] : {}
     if (isBinary(prop) || isBinary(items)) {
+      // A file goes with its own type; the document's (Encoding or contentMediaType) is not sent.
+      const binary = isBinary(items) ? items : prop
+      const fileType = str(own(encoding, 'contentType')) ?? (isObject(binary) ? str(own(binary, 'contentMediaType')) : undefined)
+      if (fileType && !/\*|^\s*application\/octet-stream\s*$/i.test(fileType)) fileTyped.push(name)
+      if (multipart && isObject(own(encoding, 'headers')) && Object.keys(own(encoding, 'headers') as object).length > 0) withHeaders.push(name)
       fields.push({ name, value: FILE_PLACEHOLDER, file: true, exact: FILE_PLACEHOLDER })
       continue
     }
     const value = values[name]
     if (value === undefined) continue
-    const encoding = isObject(encodings[name]) ? encodings[name] : {}
     const contentType = str(own(encoding, 'contentType'))
     // 3.0 applies style only to urlencoded bodies; 3.1 and later to multipart too.
     const styled = ['style', 'explode', 'allowReserved'].some((key) => own(encoding, key) !== undefined) && (!multipart || family !== 'openapi30')
@@ -608,6 +638,7 @@ function formFields(refs: Refs, media: MediaView, example: unknown, family: Open
     }
   }
   if (typed.length > 0) notes.push({ key: 'partType', values: { names: [...new Set(typed)].join(', ') }, langs: ['curl', 'fetch', 'httpie'] })
+  if (fileTyped.length > 0) notes.push({ key: 'fileType', values: { names: fileTyped.join(', ') } })
   if (withHeaders.length > 0) notes.push({ key: 'partHeaders', values: { names: withHeaders.join(', ') } })
   return fields
 }
@@ -673,14 +704,17 @@ export function sampleLanguages(request: SampleRequest): SampleLanguage[] {
     if (language === 'curl') return shell && curlFieldNames(request).length === 0
     // A URL that starts with `-` would be an option (buildRequest always gives one a scheme).
     if (language === 'httpie') return shell && /^[A-Za-z]+$/.test(request.method) && !request.url.startsWith('-') && httpieMisses(request).length === 0
+    if (language === 'fetch') return !FETCH_FORBIDDEN_METHOD.test(request.method)
     return true
   })
 }
 
-/** Why curl or HTTPie has no sample, when the shell is not the reason (see shellSafe). */
+/** Why fetch, curl or HTTPie has no sample, when the shell is not the reason (see shellSafe). */
 export function unavailableNotes(request: SampleRequest): SampleNote[] {
-  if (!request.methodValid || !shellSafe(request)) return []
+  if (!request.methodValid) return []
   const notes: SampleNote[] = []
+  if (FETCH_FORBIDDEN_METHOD.test(request.method)) notes.push({ key: 'noFetchMethod', values: { method: request.method } })
+  if (!shellSafe(request)) return notes
   const fields = curlFieldNames(request)
   if (fields.length > 0) notes.push({ key: 'noCurlField', values: { names: fields.join(', ') } })
   if (!/^[A-Za-z]+$/.test(request.method)) notes.push({ key: 'noHttpieMethod', values: { method: request.method } })
@@ -798,7 +832,16 @@ function jsString(text: string): string {
 }
 
 function jsKey(key: string): string {
+  // `__proto__: …` in an object literal sets the prototype instead of adding the key.
+  if (key === '__proto__') return `[${jsString(key)}]`
   return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : jsString(key)
+}
+
+/** Whether a JSON value has a `__proto__` key, which a JS object literal would not keep. */
+function hasProtoKey(value: unknown, budget = { left: 100_000 }): boolean {
+  if (value === null || typeof value !== 'object' || budget.left-- <= 0) return false
+  if (Array.isArray(value)) return value.some((item) => hasProtoKey(item, budget))
+  return Object.keys(value).some((key) => key === '__proto__' || hasProtoKey((value as Record<string, unknown>)[key], budget))
 }
 
 function indentBlock(text: string, pad: string): string {
@@ -836,6 +879,9 @@ function renderFetch(request: SampleRequest): string {
     options.push('  body: new URLSearchParams({')
     for (const field of body.form) options.push(`    ${jsKey(field.name)}: ${jsString(field.value)},`)
     options.push('  }),')
+  } else if (body?.json !== undefined && hasProtoKey(body.json)) {
+    // As JSON text: a `"__proto__": …` entry in an object literal would set the prototype.
+    options.push(`  body: ${jsString(jsonText(body.json, { maxLength: MAX_BODY }).text)},`)
   } else if (body?.json !== undefined) {
     options.push(`  body: JSON.stringify(${indentBlock(jsonText(body.json, { maxLength: MAX_BODY, indent: 2 }).text, '  ')}),`)
   } else if (body?.text !== undefined) {
@@ -891,12 +937,15 @@ function renderPython(request: SampleRequest): string {
   if (request.query.length > 0) {
     args.push(`    params=${pyDict(request.query)}`)
   }
-  // `json=` sets Content-Type: application/json itself.
-  const headers = request.headers.filter(([name, value]) => !(request.body?.json !== undefined && name === 'Content-Type' && /^application\/json$/i.test(value)))
+  // `json=` sets Content-Type: application/json itself. A JSON null goes as text: requests reads
+  // `json=None` as no body at all.
+  const nullJson = request.body?.json === null
+  const headers = request.headers.filter(([name, value]) => !(request.body?.json !== undefined && !nullJson && name === 'Content-Type' && /^application\/json$/i.test(value)))
   if (headers.length > 0) args.push(`    headers={${headers.map(([k, v]) => `${pyString(k)}: ${pyString(v)}`).join(', ')}}`)
   if (request.basicAuth) args.push('    auth=("<USERNAME>", "<PASSWORD>")')
   const body = request.body
-  if (body?.json !== undefined) args.push(`    json=${toPython(body.json, 1)}`)
+  if (nullJson) args.push('    data="null"')
+  else if (body?.json !== undefined) args.push(`    json=${toPython(body.json, 1)}`)
   else if (body?.form && /multipart/i.test(body.mediaType)) {
     // Every part goes in files=, so requests sends multipart even with no file: text parts as
     // (None, value), with their Content-Type where they have one. Repeated names need a list.

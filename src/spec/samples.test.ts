@@ -868,7 +868,7 @@ paths:
   const python = renderSample('python', multi)
   assert.match(python, /files=\[\n {8}\("tags", \(None, "a"\)\),\n {8}\("tags", \(None, "b"\)\),\n {8}\("meta", \(None, "\{\\"n\\":1\}", "application\/json"\)\),/)
   assert.ok(!python.includes('data='), python)
-  assert.deepEqual(keys(commonNotes(multi)), ['partHeaders'])
+  assert.deepEqual(keys(commonNotes(multi)), ['partHeaders', 'fileParts'])
   for (const language of ['curl', 'fetch', 'httpie'] as const) assert.deepEqual(keys(sampleNotes(language, multi)), ['partType'], language)
   assert.deepEqual(sampleNotes('python', multi), [])
   const textOnly = one(spec.replace('photos: { type: array, items: { type: string, format: binary } }', 'n: { type: string }'), '/multi')
@@ -1039,4 +1039,243 @@ paths:
 `, '/m')
   assert.deepEqual(keys(sampleNotes('fetch', request)), ['partLineBreaks'])
   assert.deepEqual(sampleNotes('python', request), [])
+})
+
+test('fetch is left out for TRACE, TRACK and CONNECT, with a note; other clients keep them', () => {
+  // Before: the JavaScript sample was offered and threw "'TRACE' HTTP method is unsupported".
+  const spec = `openapi: 3.2.0
+info: { title: T, version: '1' }
+servers: [{ url: 'https://api.test' }]
+paths:
+  /debug:
+    trace: { responses: { '200': { description: ok } } }
+    additionalOperations:
+      TRACK: { responses: { '200': { description: ok } } }
+      CONNECT: { responses: { '200': { description: ok } } }
+      purge: { responses: { '204': { description: gone } } }
+`
+  for (const method of ['TRACE', 'TRACK', 'CONNECT']) {
+    const request = byMethod(spec, method === 'TRACE' ? 'trace' : method, '/debug')
+    assert.equal(request.method, method)
+    assert.deepEqual(sampleLanguages(request), ['curl', 'python', 'httpie'], method)
+    assert.deepEqual(commonNotes(request), [{ key: 'noFetchMethod', values: { method } }], method)
+  }
+  // A method in lower case: requests and HTTPie send it in capitals, and say so.
+  const purge = byMethod(spec, 'purge', '/debug')
+  assert.deepEqual(sampleLanguages(purge), ['curl', 'fetch', 'python', 'httpie'])
+  assert.ok(renderSample('curl', purge).startsWith('curl -X purge '))
+  for (const language of ['python', 'httpie'] as const) assert.deepEqual(sampleNotes(language, purge), [{ key: 'methodCase', values: { upper: 'PURGE' }, langs: ['python', 'httpie'] }])
+  assert.deepEqual(sampleNotes('curl', purge), [])
+  assert.deepEqual(sampleNotes('fetch', purge), [])
+})
+
+test('headers the client sets itself are left out of every sample, and fetch names those browsers drop', () => {
+  // Before: Content-Length: 0 was made up for tus uploads; curl hung or sent a broken request,
+  // and fetch threw on Transfer-Encoding, Keep-Alive, Upgrade and Connection.
+  const spec = `openapi: 3.0.3
+info: { title: T, version: '1' }
+servers: [{ url: 'https://api.test' }]
+paths:
+  /files/{id}:
+    patch:
+      parameters:
+        - { name: id, in: path, required: true, example: f1 }
+        - { name: Content-Length, in: header, required: true, schema: { type: integer } }
+        - { name: Transfer-Encoding, in: header, required: true, example: chunked }
+        - { name: Host, in: header, required: true, example: tus.test }
+        - { name: connection, in: header, required: true, example: Upgrade }
+        - { name: Keep-Alive, in: header, required: true, example: timeout=5 }
+        - { name: TE, in: header, required: true, example: trailers }
+        - { name: Trailer, in: header, required: true, example: Expires }
+        - { name: Upgrade, in: header, required: true, example: h2c }
+        - { name: Expect, in: header, required: true, example: 100-continue }
+        - { name: Upload-Offset, in: header, required: true, example: 0 }
+        - { name: Origin, in: header, required: true, example: 'https://app.test' }
+        - { name: Sec-Purpose, in: header, required: true, example: prefetch }
+        - { name: X-HTTP-Method-Override, in: header, required: true, example: TRACE }
+      security: [{ hostKey: [] }]
+      requestBody: { required: true, content: { application/offset+octet-stream: { schema: { type: string, format: binary } } } }
+      responses: { '204': { description: ok } }
+components:
+  securitySchemes:
+    hostKey: { type: apiKey, in: header, name: Host }
+`
+  const request = one(spec, '/files/{id}')
+  assert.deepEqual(request.headers.map(([name]) => name), ['Upload-Offset', 'Origin', 'Sec-Purpose', 'X-HTTP-Method-Override', 'Content-Type'])
+  assert.deepEqual(commonNotes(request), [{ key: 'clientHeaders', values: { names: 'Content-Length, Transfer-Encoding, Host, connection, Keep-Alive, TE, Trailer, Upgrade, Expect' } }])
+  for (const language of sampleLanguages(request)) {
+    const sample = renderSample(language, request).toLowerCase()
+    for (const name of ['content-length', 'transfer-encoding', 'host:', 'keep-alive', 'upgrade', 'expect']) assert.ok(!sample.includes(name), `${language}: ${name}`)
+  }
+  assert.deepEqual(sampleNotes('fetch', request), [{ key: 'browserHeaders', values: { names: 'Origin, Sec-Purpose, X-HTTP-Method-Override' }, langs: ['fetch'] }])
+  assert.deepEqual(sampleNotes('curl', request), [])
+})
+
+test('a JSON null body is sent as null by every client', () => {
+  // Before: Python wrote json=None, which requests sends as no body and no Content-Type.
+  const spec = `openapi: 3.1.0
+info: { title: T, version: '1' }
+servers: [{ url: 'https://api.test' }]
+paths:
+  /rerun:
+    post:
+      requestBody: { content: { application/json: { schema: { type: [object, 'null'] }, examples: { default: { value: null } } } } }
+      responses: { '201': { description: ok } }
+  /required:
+    post:
+      requestBody: { required: true, content: { application/json: { schema: { type: 'null' } } } }
+      responses: { '201': { description: ok } }
+`
+  for (const route of ['/rerun', '/required']) {
+    const request = one(spec, route)
+    assert.deepEqual(request.body, { mediaType: 'application/json', json: null }, route)
+    const python = renderSample('python', request)
+    assert.ok(python.includes('headers={"Content-Type": "application/json"}'), python)
+    assert.ok(python.includes('data="null"') && !python.includes('json='), python)
+    assert.ok(renderSample('curl', request).includes("-d null"))
+    assert.ok(renderSample('fetch', request).includes('body: JSON.stringify(null)'))
+    assert.ok(renderSample('httpie', request).includes('--raw=null'))
+    assert.deepEqual(commonNotes(request), [])
+  }
+})
+
+test('a required form body whose schema names no fields: one placeholder file part, or no body, with a note', () => {
+  // Before: Jira's addAttachment (an array of files) sent nothing from curl and Python and an
+  // empty multipart from fetch and HTTPie, with no note.
+  const spec = `openapi: 3.0.1
+info: { title: T, version: '1' }
+servers: [{ url: 'https://api.test' }]
+paths:
+  /attachments:
+    post:
+      requestBody:
+        required: true
+        content: { multipart/form-data: { schema: { type: array, items: { $ref: '#/components/schemas/MultipartFile' } } } }
+      responses: { '200': { description: ok } }
+  /list:
+    post:
+      requestBody: { required: true, content: { application/x-www-form-urlencoded: { schema: { type: array, items: { type: string } } } } }
+      responses: { '200': { description: ok } }
+components:
+  schemas:
+    MultipartFile: { type: object, properties: { name: { type: string } } }
+`
+  const files = one(spec, '/attachments')
+  assert.deepEqual(files.body, { mediaType: 'multipart/form-data', form: [{ name: 'file', value: 'file.bin', file: true }] })
+  assert.deepEqual(keys(commonNotes(files)), ['formPlaceholder', 'fileParts'])
+  assert.deepEqual(sampleLanguages(files), ['curl', 'fetch', 'python', 'httpie'])
+  assertSends('curl', files)
+  assertSends('httpie', files)
+  assert.ok(renderSample('fetch', files).includes("form.append('file', fileInput.files[0])"))
+  assert.ok(renderSample('python', files).includes('files={"file": open("file.bin", "rb")}'))
+  const list = one(spec, '/list')
+  assert.equal(list.body, undefined)
+  assert.deepEqual(list.headers, [])
+  assert.deepEqual(keys(commonNotes(list)), ['formNoFields'])
+  assert.ok(renderSample('curl', list).startsWith('curl -X POST '))
+})
+
+test('a file part’s own type and headers from the Encoding Object are noted, not dropped silently', () => {
+  const spec = `openapi: 3.1.0
+info: { title: T, version: '1' }
+servers: [{ url: 'https://api.test' }]
+paths:
+  /avatar:
+    post:
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                avatar: { type: string, format: binary }
+                docs: { type: array, items: { type: string, contentMediaType: application/pdf } }
+                any: { type: string, format: binary }
+                raw: { type: string, format: binary }
+            encoding:
+              avatar: { contentType: 'image/png, image/jpeg', headers: { X-Rate-Limit: { schema: { type: integer } } } }
+              any: { contentType: 'image/*' }
+              raw: { contentType: application/octet-stream }
+      responses: { '200': { description: ok } }
+`
+  const request = one(spec, '/avatar')
+  assert.deepEqual(commonNotes(request), [
+    { key: 'fileType', values: { names: 'avatar, docs' } },
+    { key: 'partHeaders', values: { names: 'avatar' } },
+    { key: 'fileParts' }
+  ])
+})
+
+test('fetch keeps a __proto__ key, which an object literal would turn into a prototype', () => {
+  const spec = `openapi: 3.1.0
+info: { title: T, version: '1' }
+servers: [{ url: 'https://api.test' }]
+paths:
+  /json:
+    post:
+      parameters: [{ name: __proto__, in: header, required: true, example: h }]
+      requestBody: { content: { application/json: { example: { __proto__: { x: 1 }, a: 1 } } } }
+      responses: { '200': { description: ok } }
+  /form:
+    post:
+      requestBody: { content: { application/x-www-form-urlencoded: { example: { __proto__: x, a: '1' } } } }
+      responses: { '200': { description: ok } }
+`
+  const json = renderSample('fetch', one(spec, '/json'))
+  assert.ok(json.includes(`['__proto__']: 'h',`), json)
+  assert.ok(json.includes(`body: '{"__proto__":{"x":1},"a":1}',`), json)
+  const form = renderSample('fetch', one(spec, '/form'))
+  assert.ok(form.includes(`['__proto__']: 'x',`), form)
+  // Run as JavaScript, the literals keep the key.
+  const literal = { ['__proto__']: 'x', a: '1' }
+  assert.deepEqual(Object.keys(literal), ['__proto__', 'a'])
+})
+
+test('pipeDelimited items that hold “|” are noted for Python and HTTPie, which encode every “|”', () => {
+  const spec = `openapi: 3.1.0
+info: { title: T, version: '1' }
+servers: [{ url: 'https://api.test' }]
+paths:
+  /pp:
+    get:
+      parameters:
+        - { name: pp, in: query, required: true, style: pipeDelimited, explode: false, example: [a, 'b|c'] }
+        - { name: ok, in: query, required: true, style: pipeDelimited, explode: false, example: [a, b] }
+      responses: { '200': { description: ok } }
+`
+  const request = one(spec, '/pp')
+  assert.ok(request.url.endsWith('?pp=a|b%7Cc&ok=a|b'), request.url)
+  for (const language of ['python', 'httpie'] as const) assert.deepEqual(sampleNotes(language, request), [{ key: 'pipeItems', values: { names: 'pp' }, langs: ['python', 'httpie'] }])
+  assert.deepEqual(sampleNotes('curl', request), [])
+})
+
+test('half of a UTF-16 pair in server, route or joined query text is noted, and JSON text gets U+FFFD too', () => {
+  // Before: these were replaced with no note, and JSON text kept the escape \ud83d.
+  const half = String.fromCharCode(0xd83d)
+  const ok = { 200: { description: 'ok' } }
+  const spec = JSON.stringify({
+    openapi: '3.2.0',
+    info: { title: 'T', version: '1' },
+    servers: [{ url: 'https://api.test/{v}', variables: { v: { default: 'v' + half } } }],
+    paths: {
+      '/srv': { get: { responses: ok } },
+      ['/r' + half + '/x']: { get: { servers: [{ url: 'https://api.test' }], responses: ok } },
+      '/joined': { get: { servers: [{ url: 'https://api.test' }], parameters: [{ name: 'f', in: 'query', required: true, explode: false, example: ['a' + half, 'b,c'] }], responses: ok } },
+      '/qs': { get: { servers: [{ url: 'https://api.test' }], parameters: [{ name: 'q', in: 'querystring', content: { 'application/json': { example: { a: half } } } }], responses: ok } },
+      '/content': { get: { servers: [{ url: 'https://api.test' }], parameters: [{ name: 'c', in: 'query', required: true, content: { 'application/json': { example: { a: half } } } }], responses: ok } },
+      '/seq': { post: { servers: [{ url: 'https://api.test' }], requestBody: { content: { 'application/jsonl': { itemSchema: { type: 'object' }, example: { a: half } } } }, responses: ok } }
+    }
+  })
+  const escaped = /\\u[dD][89a-fA-F][0-9a-fA-F]{2}/
+  for (const route of ['/srv', '/r' + half + '/x', '/joined', '/qs', '/content', '/seq']) {
+    const request = one(spec, route)
+    assert.equal(request.replaced, true, route)
+    for (const language of sampleLanguages(request)) {
+      const sample = renderSample(language, request)
+      assert.ok(!escaped.test(sample) && !/%5Cud83d/i.test(sample), `${route} ${language}: ${sample}`)
+    }
+  }
+  assert.equal(one(spec, '/srv').url, 'https://api.test/v%EF%BF%BD/srv')
+  assert.ok(one(spec, '/joined').url.endsWith('?f=a%EF%BF%BD,b%2Cc'))
+  assert.equal(one(spec, '/seq').body?.text, '{"a":"�"}\n')
 })
