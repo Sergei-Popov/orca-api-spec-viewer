@@ -5,6 +5,7 @@ import type { Family } from './detect'
 import type { ComponentEntry } from './openapi'
 import { getAt, isObject, own, str, toPointer } from './pointer'
 import { refOf, type Loc, type Refs, type Resolution } from './refs'
+import { isJsonSchemaFormat } from './schema-format'
 
 export interface AsyncMessage {
   key: string
@@ -386,4 +387,25 @@ export function asyncServerList(model: AsyncApiModel, value: unknown): AsyncServ
 export function infoOf(root: Record<string, unknown>): Record<string, unknown> {
   const info = getAt(root, ['info'])
   return isObject(info) ? info : {}
+}
+
+/**
+ * A message's payload as it is drawn: the schema and where it is, its schemaFormat (3.x Multi
+ * Format Schema Object, or a 2.x message's own, traits applied), and whether it is shown as
+ * source because that format is not a JSON Schema (Avro, Protobuf, RAML…).
+ */
+export function messagePayload(message: Record<string, unknown>, loc: Loc, family: Family): { value: unknown; loc: Loc; format?: string; source: boolean } | undefined {
+  const raw = own(message, 'payload')
+  if (raw === undefined) return undefined
+  const at: Loc = { doc: loc.doc, path: [...loc.path, 'payload'] }
+  const multi = family === 'asyncapi3' ? schemaWithFormat(raw, at) : undefined
+  if (multi) return multi
+  const format = family === 'asyncapi2' ? str(own(message, 'schemaFormat')) : undefined
+  return { value: raw, loc: at, format, source: !isJsonSchemaFormat(format) }
+}
+
+/** A Multi Format Schema Object (`{ schemaFormat, schema }`, AsyncAPI 3) as its schema and format. */
+export function schemaWithFormat(value: unknown, loc: Loc): { value: unknown; loc: Loc; format: string; source: boolean } | undefined {
+  if (!isObject(value) || typeof value.schemaFormat !== 'string' || own(value, 'schema') === undefined) return undefined
+  return { value: own(value, 'schema'), loc: { doc: loc.doc, path: [...loc.path, 'schema'] }, format: value.schemaFormat, source: !isJsonSchemaFormat(value.schemaFormat) }
 }

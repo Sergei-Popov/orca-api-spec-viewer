@@ -2,7 +2,7 @@
 // viewer: each fixture is the smallest document that showed one.
 import { assert, test } from 'orca/testing'
 import { analyze } from '../analyze'
-import { asyncSecurityItems, replyOf, type AsyncApiModel } from '../spec/asyncapi'
+import { asyncSecurityItems, messagePayload, replyOf, schemaWithFormat, type AsyncApiModel } from '../spec/asyncapi'
 import { exampleFromSchema } from '../spec/example'
 import type { OpenApiModel } from '../spec/openapi'
 import { operationDetails } from '../spec/operation'
@@ -677,4 +677,49 @@ channels:
   a: { subscribe: { message: { payload: { type: string } } } }
 x-tooling: { schema: { $ref: '#/components/schemas/Missing' } }
 `), [])
+})
+
+test('AsyncAPI: a payload that is not a JSON Schema is shown as its source, with its format', () => {
+  // Before: an Avro record was drawn as a schema tree (just `record`, no fields), and a 2.x
+  // message's schemaFormat was never shown.
+  const v2 = analyze(`asyncapi: 2.6.0
+info: { title: T, version: '1' }
+channels:
+  users:
+    subscribe:
+      message:
+        traits: [{ $ref: '#/components/messageTraits/Avro' }]
+        payload: { type: record, name: User, fields: [{ name: id, type: long }] }
+  plain:
+    subscribe:
+      message:
+        schemaFormat: 'application/schema+json;version=draft-07'
+        payload: { type: string }
+components:
+  messageTraits:
+    Avro: { schemaFormat: 'application/vnd.apache.avro;version=1.9.0' }
+`)
+  const m2 = (v2.model as { model: AsyncApiModel }).model
+  const shown2 = m2.operations.map((op) => op.messages.map((msg) => messagePayload(msg.value, msg.loc, m2.family)))
+  assert.deepEqual(shown2.map(([p]) => [p?.format, p?.source]), [['application/vnd.apache.avro;version=1.9.0', true], ['application/schema+json;version=draft-07', false]])
+  const v3 = analyze(`asyncapi: 3.0.0
+info: { title: T, version: '1' }
+channels:
+  users: { address: users, messages: { User: { payload: { schemaFormat: 'application/vnd.apache.avro+json;version=1.9.0', schema: { type: record, name: User, fields: [] } } } } }
+operations:
+  get: { action: receive, channel: { $ref: '#/channels/users' } }
+components:
+  schemas:
+    Json: { schemaFormat: 'application/schema+yaml;version=draft-07', schema: { type: string } }
+    Plain: { type: string }
+`)
+  const m3 = (v3.model as { model: AsyncApiModel }).model
+  const user = m3.operations[0].messages[0]
+  const p3 = messagePayload(user.value, user.loc, m3.family)!
+  assert.equal(p3.source, true)
+  assert.deepEqual(p3.loc.path, ['channels', 'users', 'messages', 'User', 'payload', 'schema'])
+  const at = (name: string) => ({ doc: '', path: ['components', 'schemas', name] })
+  const json = schemaWithFormat((v3.parsed.value as any).components.schemas.Json, at('Json'))!
+  assert.deepEqual([json.source, json.loc.path.at(-1)], [false, 'schema'])
+  assert.equal(schemaWithFormat((v3.parsed.value as any).components.schemas.Plain, at('Plain')), undefined)
 })

@@ -3,7 +3,7 @@
 
 import { format } from '../i18n'
 import { isRuntimeExpression, type ArazzoModel, type ArazzoWorkflow, type OverlayModel } from '../spec/arazzo'
-import { asyncSecurityItems, asyncServerList, replyOf, withTraits, type AsyncApiModel, type AsyncChannel, type AsyncMessage, type AsyncOperation, type AsyncServer } from '../spec/asyncapi'
+import { asyncSecurityItems, asyncServerList, messagePayload, replyOf, schemaWithFormat, withTraits, type AsyncApiModel, type AsyncChannel, type AsyncMessage, type AsyncOperation, type AsyncServer } from '../spec/asyncapi'
 import { familyLabel, type Detection } from '../spec/detect'
 import { exampleFromSchema } from '../spec/example'
 import { isObject, own, str, toPointer } from '../spec/pointer'
@@ -170,10 +170,9 @@ function messageBox(ctx: PageCtx, model: AsyncApiModel, msg: AsyncMessage, id: s
   if (intro.filter(Boolean).length) box.append(h('div', { className: 'boxbody' }, ...intro))
 
   // Payload, headers and examples as tabs.
-  const payloadRaw = own(value, 'payload')
-  const multi = isObject(payloadRaw) && typeof payloadRaw.schemaFormat === 'string' && own(payloadRaw, 'schema') !== undefined
-  const payload = multi ? own(payloadRaw as Record<string, unknown>, 'schema') : payloadRaw
-  const payloadLoc = multi ? child(msg.loc, 'payload', 'schema') : child(msg.loc, 'payload')
+  const shown = messagePayload(value, msg.loc, model.family)
+  const payload = shown?.value
+  const payloadLoc = shown?.loc ?? child(msg.loc, 'payload')
   const headers = own(value, 'headers')
   const examples = Array.isArray(own(value, 'examples')) ? (own(value, 'examples') as unknown[]).filter(isObject) : []
   const options: { value: string; label: string }[] = []
@@ -187,10 +186,14 @@ function messageBox(ctx: PageCtx, model: AsyncApiModel, msg: AsyncMessage, id: s
     if (which === 'payload' || which === 'headers') {
       const raw = which === 'payload' ? payload : headers
       const loc = which === 'payload' ? payloadLoc : child(msg.loc, 'headers')
+      if (which === 'payload' && shown?.format !== undefined) body.append(formatNote(shown.format))
+      if (which === 'payload' && shown?.source) {
+        body.append(...sourceView(ctx, raw, loc, tools))
+        return
+      }
       const treeId = `${id}/${which}`
       const tree = schemaTree(ctx, raw, loc, treeId)
       tools.append(treeTools(ctx, treeId, tree))
-      if (multi && which === 'payload') body.append(h('div', { className: 'note' }, svg(icons.info), h('span', { className: 'mono' }, String((payloadRaw as Record<string, unknown>).schemaFormat))))
       body.append(tree)
     } else {
       if (examples.length > 0) {
@@ -202,7 +205,7 @@ function messageBox(ctx: PageCtx, model: AsyncApiModel, msg: AsyncMessage, id: s
           if (own(ex, 'payload') !== undefined) shown.payload = own(ex, 'payload')
           body.append(jsonBlock(ctx, Object.keys(shown).length === 1 && shown.payload !== undefined ? shown.payload : shown))
         }
-      } else if (payload !== undefined) {
+      } else if (payload !== undefined && !shown?.source) {
         const generated = exampleFromSchema(ctx.refs, payload, payloadLoc, { mode: 'response' })
         if (generated !== undefined) {
           const text = valueToText(generated)
@@ -347,6 +350,23 @@ export function serverPage(ctx: PageCtx, model: AsyncApiModel, server: AsyncServ
   return page
 }
 
+/** The schemaFormat a payload is written in. */
+function formatNote(format: string): HTMLElement {
+  return h('div', { className: 'note' }, svg(icons.info), h('span', { className: 'mono' }, format))
+}
+
+/**
+ * A schema that is not a JSON Schema (Avro, Protobuf, RAML…) as its source: text as it is, an
+ * object as JSON, a reference followed; a copy button goes into `tools`.
+ */
+function sourceView(ctx: PageCtx, raw: unknown, loc: Loc, tools: HTMLElement): HTMLElement[] {
+  const followed = ctx.refs.follow(raw, loc)
+  if (followed.stop) return [stopNote(ctx, followed.stop)]
+  const text = typeof followed.value === 'string' ? followed.value : valueToText(followed.value)
+  tools.append(copyButton(ctx, text, ctx.t.copyCode))
+  return [typeof followed.value === 'string' ? codeBlock(text, 'text') : jsonBlock(ctx, followed.value)]
+}
+
 export function asyncComponentPage(ctx: PageCtx, model: AsyncApiModel, section: string, name: string, loc: Loc, raw: unknown): HTMLElement {
   const page = h('div', { className: 'page' })
   page.append(h('div', { className: 'crumbs' }, chip(ctx.t.sections[section] ?? section)), h('h1', { className: 'h mono', style: 'font-size:20px' }, name))
@@ -354,7 +374,19 @@ export function asyncComponentPage(ctx: PageCtx, model: AsyncApiModel, section: 
   if (line) page.append(h('div', { className: 'meta' }, clickable(h('a', { className: 'link' }, format(ctx.t.line, { n: line })), () => ctx.showLine(line)), copyButton(ctx, '#' + toPointer(loc.path), ctx.t.copyPointer)))
   const id = 'c:' + toPointer(loc.path)
   const followed = ctx.refs.follow(raw, loc)
-  if (section === 'schemas') {
+  const multi = section === 'schemas' && model.family === 'asyncapi3' ? schemaWithFormat(followed.value, followed.loc) : undefined
+  if (multi) {
+    // A Multi Format Schema Object: the schema in its format, as a tree or (Avro, …) as source.
+    const tools = h('span')
+    const body = h('div', null, formatNote(multi.format))
+    if (multi.source) append(body, ...sourceView(ctx, multi.value, multi.loc, tools))
+    else {
+      const tree = schemaTree(ctx, multi.value, multi.loc, id)
+      tools.append(treeTools(ctx, id, tree))
+      body.append(tree)
+    }
+    page.append(h('div', { className: 'box' }, h('div', { className: 'boxhead' }, h('b', null, ctx.t.schema), h('span', { className: 'grow' }), tools), body))
+  } else if (section === 'schemas') {
     const tree = schemaTree(ctx, raw, loc, id)
     page.append(h('div', { className: 'box' }, h('div', { className: 'boxhead' }, h('b', null, ctx.t.schema), h('span', { className: 'grow' }), treeTools(ctx, id, tree)), tree))
   } else if (section === 'messages' || section === 'messageTraits') {
