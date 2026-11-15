@@ -7,6 +7,8 @@ All notable changes to this plugin are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-15
+
 ### Added
 
 - An API reference view for OpenAPI 3.0, 3.1 and 3.2, Swagger 2.0, AsyncAPI 2.x and 3.x,
