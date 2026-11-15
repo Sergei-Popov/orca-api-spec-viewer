@@ -210,7 +210,8 @@ const en = {
     'array of strings': 'array of strings',
     'non-negative integer': 'non-negative integer',
     'number > 0': 'number > 0',
-    'boolean or object': 'boolean or object'
+    'boolean or object': 'boolean or object',
+    'reference string': 'a string (in YAML, quote a $ref that starts with #: unquoted, the rest of the line is a comment)'
   } as Record<string, string>,
   emptyFile: 'the file is empty',
   codeSamples: 'Code samples',
@@ -607,7 +608,8 @@ const ru: Strings = {
     'array of strings': 'массив строк',
     'non-negative integer': 'неотрицательное целое число',
     'number > 0': 'число больше 0',
-    'boolean or object': 'boolean или object'
+    'boolean or object': 'boolean или object',
+    'reference string': 'строка (в YAML $ref, начинающийся с #, берут в кавычки: без них остаток строки — комментарий)'
   },
   emptyFile: 'файл пуст',
   codeSamples: 'Примеры кода',

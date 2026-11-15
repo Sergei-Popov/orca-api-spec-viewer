@@ -565,3 +565,116 @@ components:
   assert.deepEqual(reply('ping').messages.map((m) => m.name), ['pong', 'error'])
   assert.deepEqual(reply('pingOne').messages.map((m) => m.name), ['pong'])
 })
+
+test('a component Link with a bad operationId is reported once, not once per use', () => {
+  // Before: the same problem at the same path, once for the definition and once per response.
+  const problems = found(`openapi: 3.1.0
+info: { title: T, version: '1' }
+paths:
+  /a:
+    get:
+      operationId: getA
+      responses:
+        '200': { description: ok, links: { next: { $ref: '#/components/links/Next' } } }
+        '201': { description: ok, links: { next: { $ref: '#/components/links/Next' } } }
+components:
+  links:
+    Next: { operationId: missingOp }
+`)
+  assert.deepEqual(problems.filter((p) => p.startsWith('link-operation')), ['link-operation components/links/Next/operationId'])
+})
+
+test('a $ref that is not a string is reported, with the YAML quoting hint', () => {
+  // Before: `$ref: #/components/schemas/Pet` unquoted is `$ref: null` in YAML, and nothing was said.
+  for (const version of ['3.0.3', '3.1.0']) {
+    const result = analyze(`openapi: ${version}
+info: { title: T, version: '1' }
+paths:
+  /a:
+    get:
+      parameters:
+        - $ref: 42
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  details:
+                    $ref: #/components/schemas/Pet
+components:
+  schemas:
+    Pet: { type: object }
+`)
+    const wrong = result.problems.filter((p) => p.rule === 'wrong-type' && p.path.at(-1) === '$ref')
+    assert.deepEqual(wrong.map((p) => [p.path.join('/'), p.params.actual]), [
+      ['paths//a/get/parameters/0/$ref', 'integer'],
+      ['paths//a/get/responses/200/content/application/json/schema/properties/details/$ref', 'null']
+    ], version)
+    assert.equal(wrong[0].params.expected, 'reference string')
+    // No knock-on noise from the parameter's missing fields.
+    assert.ok(!result.problems.some((p) => p.rule === 'required-field' && p.path.join('/') === 'paths//a/get/parameters/0'), version)
+  }
+})
+
+test('AsyncAPI 2.x: a schemaFormat from a message trait picks the payload rules', () => {
+  // Before: an Avro payload whose schemaFormat came from a trait was checked as a JSON Schema.
+  const problems = found(`asyncapi: 2.6.0
+info: { title: T, version: '1' }
+channels:
+  users:
+    subscribe:
+      message:
+        traits: [{ $ref: '#/components/messageTraits/Avro' }]
+        payload: { type: record, name: User, fields: [{ name: id, type: long }] }
+components:
+  messageTraits:
+    Avro: { schemaFormat: 'application/vnd.apache.avro;version=1.9.0' }
+`)
+  assert.deepEqual(problems, [])
+})
+
+test('AsyncAPI: references inside bindings are checked, not only counted', () => {
+  // Before: a binding $ref to a missing schema gave no error, and an external one no note.
+  const result = analyze(`asyncapi: 2.6.0
+info: { title: T, version: '1' }
+channels:
+  users:
+    subscribe:
+      message:
+        payload: { type: string }
+        bindings:
+          kafka:
+            key: { $ref: '#/components/schemas/Missing' }
+  costs:
+    subscribe:
+      message:
+        payload: { type: string }
+        bindings:
+          kafka:
+            key: { $ref: 'https://example.com/key.avsc' }
+  ok:
+    subscribe:
+      message:
+        payload: { type: string }
+        bindings:
+          kafka:
+            key: { $ref: '#/components/schemas/Key' }
+components:
+  schemas:
+    Key: { type: string }
+`)
+  assert.deepEqual(result.problems.map((p) => `${p.rule} ${p.path.join('/')}`), [
+    'unresolved-ref channels/users/subscribe/message/bindings/kafka/key/$ref',
+    'external-ref channels/costs/subscribe/message/bindings/kafka/key/$ref'
+  ])
+  // An extension's references still only count as uses.
+  assert.deepEqual(found(`asyncapi: 2.6.0
+info: { title: T, version: '1' }
+channels:
+  a: { subscribe: { message: { payload: { type: string } } } }
+x-tooling: { schema: { $ref: '#/components/schemas/Missing' } }
+`), [])
+})

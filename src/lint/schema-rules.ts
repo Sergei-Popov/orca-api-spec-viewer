@@ -4,7 +4,7 @@
 
 import { isObject, own } from '../spec/pointer'
 import { schemaTypes } from '../spec/schema'
-import type { WalkContext } from './walker'
+import { actualType, type WalkContext } from './walker'
 import { duplicateIndexes, jsonText, sameJson } from '../spec/json-text'
 
 const TYPES_OLD = ['string', 'number', 'integer', 'boolean', 'array', 'object']
@@ -107,6 +107,7 @@ function checkOne(schema: Record<string, unknown>, path: string[], ctx: WalkCont
   const modern = schemaLevel(ctx) >= 31
   const old = schemaLevel(ctx) < 31
   const ref = own(schema, '$ref')
+  if (ref !== undefined && typeof ref !== 'string') ctx.problems.error('wrong-type', [...path, '$ref'], { expected: 'reference string', actual: actualType(ref) })
   if (typeof ref === 'string') {
     ctx.refs.push({ ref, path: [...path, '$ref'] })
     // In Swagger 2.0 and OpenAPI 3.0, a $ref replaces its object: siblings are ignored.

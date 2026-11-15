@@ -82,8 +82,16 @@ export class ProblemList {
   readonly items: Problem[] = []
   /** Problems beyond MAX_PROBLEMS, counted but not kept. */
   dropped = 0
+  /**
+   * What was reported already: a check that reaches one definition through several uses (a
+   * component Link referenced from two responses) reports it once.
+   */
+  private readonly seen = new Set<string>()
 
   add(rule: RuleCode, severity: Severity, path: readonly string[], params: Problem['params'] = {}): void {
+    const key = JSON.stringify([rule, severity, path, params])
+    if (this.seen.has(key)) return
+    this.seen.add(key)
     if (this.items.length >= MAX_PROBLEMS) {
       this.dropped++
       return

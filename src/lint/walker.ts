@@ -60,9 +60,10 @@ export interface WalkContext {
   allOfParts?: { schemas: Set<object>; refs: { ref: string; at: string[] }[] }
   /**
    * Parts no table describes, where a `$ref` still counts as a use of what it names: `x-…`
-   * extensions (such as Redoc's `x-webhooks`) and AsyncAPI bindings.
+   * extensions (such as Redoc's `x-webhooks`) and AsyncAPI bindings. A binding's `$ref`s are
+   * references (`checked`), so they are checked as well; an extension's are only uses.
    */
-  loose: { value: unknown; path: string[] }[]
+  loose: { value: unknown; path: string[]; checked?: boolean }[]
   root: Record<string, unknown>
   /** Objects and arrays on the current path: a value that contains itself is walked once. */
   active?: Set<object>
@@ -99,7 +100,7 @@ function typeName(type: FieldType): string {
   return 'string'
 }
 
-function actualType(value: unknown): string {
+export function actualType(value: unknown): string {
   if (value === null) return 'null'
   if (Array.isArray(value)) return 'array'
   if (Number.isInteger(value)) return 'integer'
@@ -110,7 +111,7 @@ const BINDINGS = /^(?:bindings|serverBindings|channelBindings|operationBindings|
 
 export function visit(value: unknown, type: FieldType, path: string[], ctx: WalkContext): void {
   if (type === 'any') {
-    if (value !== null && typeof value === 'object' && (BINDINGS.test(path.at(-1) ?? '') || BINDINGS.test(path.at(-2) ?? ''))) ctx.loose.push({ value, path })
+    if (value !== null && typeof value === 'object' && (BINDINGS.test(path.at(-1) ?? '') || BINDINGS.test(path.at(-2) ?? ''))) ctx.loose.push({ value, path, checked: true })
     return
   }
   if (value !== null && typeof value === 'object' && type !== 'schema') {
@@ -170,7 +171,13 @@ function visitValue(value: unknown, type: FieldType, path: string[], ctx: WalkCo
     return
   }
   // `ref` is true, or the level from which a Reference Object may stand here.
-  if (type.ref && (type.ref === true || ctx.level >= type.ref) && typeof value.$ref === 'string') {
+  const refHere = type.ref && (type.ref === true || ctx.level >= type.ref)
+  if (refHere && Object.prototype.hasOwnProperty.call(value, '$ref') && typeof value.$ref !== 'string') {
+    // `$ref: #/…` unquoted in YAML is `$ref: null`: the rest of the line is a comment.
+    ctx.problems.error('wrong-type', [...path, '$ref'], { expected: 'reference string', actual: actualType(value.$ref) })
+    return
+  }
+  if (refHere && typeof value.$ref === 'string') {
     ctx.refs.push({ ref: value.$ref, path: [...path, '$ref'] })
     const siblings = Object.keys(value).filter((k) => k !== '$ref' && !k.startsWith('x-'))
     // OpenAPI 3.1+ lets a Reference Object override `summary` and `description`.

@@ -24,13 +24,13 @@ export function checkRefs(ctx: WalkContext, refs: Refs): Usages {
   const external = new Map<string, { count: number; path: Path }>()
   const cache = new Map<string, 'ok' | 'cycle' | 'long'>()
   const schemaBase = ctx.family === 'swagger2' ? ['definitions'] : ['components', 'schemas']
-  for (const occurrence of ctx.refs) {
+  const check = (occurrence: { ref: string; path: Path; dynamic?: boolean; mappingName?: boolean }) => {
     if (occurrence.mappingName) {
       // A discriminator mapping that names a schema rather than referencing it.
       const target = getAt(ctx.root, [...schemaBase, occurrence.ref])
       if (target === undefined) ctx.problems.error('unresolved-ref', occurrence.path, { ref: occurrence.ref })
       else use(toPointer([...schemaBase, occurrence.ref]), occurrence.path)
-      continue
+      return
     }
     // The object that holds the reference: inside a `$id` resource, it resolves against that.
     const resolution = refs.resolve(occurrence.ref, '', occurrence.dynamic, occurrence.path.slice(0, -1))
@@ -38,11 +38,11 @@ export function checkRefs(ctx: WalkContext, refs: Refs): Usages {
       const entry = external.get(resolution.file)
       if (entry) entry.count++
       else external.set(resolution.file, { count: 1, path: occurrence.path })
-      continue
+      return
     }
     if (resolution.kind === 'missing') {
       ctx.problems.error('unresolved-ref', occurrence.path, { ref: occurrence.ref })
-      continue
+      return
     }
     if (resolution.loc.doc === '') use(toPointer(resolution.loc.path), occurrence.path)
     const key = locKey(resolution.loc)
@@ -55,11 +55,17 @@ export function checkRefs(ctx: WalkContext, refs: Refs): Usages {
     if (state === 'cycle') ctx.problems.error('circular-ref', occurrence.path, { ref: occurrence.ref })
     else if (state === 'long') ctx.problems.warn('long-ref-chain', occurrence.path, { ref: occurrence.ref, max: MAX_HOPS })
   }
-  for (const [file, { count, path }] of external) ctx.problems.info('external-ref', path, { file, count })
-  for (const { from, ref } of looseRefs(ctx.loose)) {
+  for (const occurrence of ctx.refs) check(occurrence)
+  // A binding's references are checked like any other; an extension's only count as uses.
+  for (const { from, ref, checked } of looseRefs(ctx.loose)) {
+    if (checked) {
+      check({ ref, path: from })
+      continue
+    }
     const resolution = refs.resolve(ref, '', false, from.slice(0, -1))
     if (resolution.kind === 'local' && resolution.loc.doc === '') use(toPointer(resolution.loc.path), from)
   }
+  for (const [file, { count, path }] of external) ctx.problems.info('external-ref', path, { file, count })
   return used
 }
 
@@ -117,13 +123,13 @@ function isData(key: string, value: unknown, objectKey: string, parentKey: strin
 }
 
 /**
- * The `$ref`s in parts no table describes. They only count as uses: an extension is free-form,
- * so one that does not resolve is not reported.
+ * The `$ref`s in parts no table describes. An extension's only count as uses: it is free-form, so
+ * one that does not resolve is not reported. A binding's are `checked`.
  */
-function looseRefs(parts: WalkContext['loose']): { ref: string; from: Path }[] {
+function looseRefs(parts: WalkContext['loose']): { ref: string; from: Path; checked: boolean }[] {
   // Each entry links to its parent, so a deep part costs no path copies: a path is built only
   // for a reference that is found.
-  type Entry = { value: unknown; key: string; parentKey: string; parent: Entry | null; base?: Path }
+  type Entry = { value: unknown; key: string; parentKey: string; parent: Entry | null; base?: Path; checked: boolean }
   const pathOf = (entry: Entry): Path => {
     const keys: string[] = []
     let at: Entry = entry
@@ -133,9 +139,9 @@ function looseRefs(parts: WalkContext['loose']): { ref: string; from: Path }[] {
     }
     return [...at.base!, ...keys.reverse()]
   }
-  const out: { ref: string; from: Path }[] = []
+  const out: { ref: string; from: Path; checked: boolean }[] = []
   const seen = new Set<object>()
-  const stack: Entry[] = parts.map((part) => ({ value: part.value, key: part.path.at(-1) ?? '', parentKey: part.path.at(-2) ?? '', parent: null, base: part.path }))
+  const stack: Entry[] = parts.map((part) => ({ value: part.value, key: part.path.at(-1) ?? '', parentKey: part.path.at(-2) ?? '', parent: null, base: part.path, checked: part.checked === true }))
   let budget = 1_000_000
   while (stack.length > 0 && budget-- > 0) {
     const entry = stack.pop()!
@@ -143,13 +149,13 @@ function looseRefs(parts: WalkContext['loose']): { ref: string; from: Path }[] {
     if (value === null || typeof value !== 'object' || seen.has(value)) continue
     seen.add(value)
     if (Array.isArray(value)) {
-      value.forEach((item, index) => stack.push({ value: item, key: String(index), parentKey: entry.key, parent: entry }))
+      value.forEach((item, index) => stack.push({ value: item, key: String(index), parentKey: entry.key, parent: entry, checked: entry.checked }))
       continue
     }
     const object = value as Record<string, unknown>
-    if (typeof object.$ref === 'string') out.push({ ref: object.$ref, from: [...pathOf(entry), '$ref'] })
+    if (typeof object.$ref === 'string') out.push({ ref: object.$ref, from: [...pathOf(entry), '$ref'], checked: entry.checked })
     for (const key of Object.keys(object)) {
-      if (!isData(key, object[key], entry.key, entry.parentKey)) stack.push({ value: object[key], key, parentKey: entry.key, parent: entry })
+      if (!isData(key, object[key], entry.key, entry.parentKey)) stack.push({ value: object[key], key, parentKey: entry.key, parent: entry, checked: entry.checked })
     }
   }
   return out
