@@ -3,6 +3,7 @@
 // AsyncAPI).
 
 import { isObject, own } from './pointer'
+import { jsonText } from './json-text'
 
 export type Schema = Record<string, unknown>
 
@@ -181,12 +182,7 @@ export function enumValues(schema: Schema): unknown[] | undefined {
 }
 
 export function formatValue(value: unknown): string {
-  if (typeof value === 'string') return JSON.stringify(value)
   if (value === undefined) return ''
-  try {
-    const text = JSON.stringify(value)
-    return text.length > 200 ? text.slice(0, 199) + '…' : text
-  } catch {
-    return String(value)
-  }
+  const { text, cut } = jsonText(value, { maxLength: 200 })
+  return cut ? text.slice(0, 199) + '…' : text
 }

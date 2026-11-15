@@ -314,6 +314,10 @@ const en = {
   messagesByRule: {
     syntax: '{text}',
     'duplicate-key': 'Duplicate key: the last value wins. {text}',
+    'yaml-alias-cycle': 'The alias *{alias} points back to a value that contains it; it is shown as a reference to that value.',
+    'yaml-alias-limit': 'The YAML aliases stand for more than a million values; *{alias} and the aliases after it are shown as null.',
+    'yaml-documents': 'The file holds more than one YAML document; only the first is shown.',
+    'lint-failed': 'The checks stopped early, so some problems may be missing: {error}',
     'required-field': 'Missing required field “{field}” in {object}.',
     'unknown-field': 'Unknown field “{field}” in {object}.',
     'wrong-type': 'Expected {expected}, found {actual}.',
@@ -662,6 +666,10 @@ const ru: Strings = {
   messagesByRule: {
     syntax: '{text}',
     'duplicate-key': 'Повторяющийся ключ: действует последнее значение. {text}',
+    'yaml-alias-cycle': 'Псевдоним *{alias} ссылается на значение, внутри которого стоит; он показан как ссылка на это значение.',
+    'yaml-alias-limit': 'Псевдонимы YAML разворачиваются больше чем в миллион значений; *{alias} и следующие псевдонимы показаны как null.',
+    'yaml-documents': 'В файле несколько документов YAML; показан только первый.',
+    'lint-failed': 'Проверки остановились раньше времени, часть проблем может быть не показана: {error}',
     'required-field': 'Нет обязательного поля «{field}» в {object}.',
     'unknown-field': 'Неизвестное поле «{field}» в {object}.',
     'wrong-type': 'Ожидается {expected}, а здесь {actual}.',

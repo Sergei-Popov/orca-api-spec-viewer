@@ -5,6 +5,7 @@
 import { isObject, own } from '../spec/pointer'
 import { schemaTypes } from '../spec/schema'
 import type { WalkContext } from './walker'
+import { jsonText, sameJson } from '../spec/json-text'
 
 const TYPES_OLD = ['string', 'number', 'integer', 'boolean', 'array', 'object']
 const TYPES_NEW = [...TYPES_OLD, 'null']
@@ -216,22 +217,13 @@ export function fitsTypes(value: unknown, types: string[]): boolean {
 }
 
 function sameValue(a: unknown, b: unknown): boolean {
-  if (a === b) return true
-  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
-  try {
-    return JSON.stringify(a) === JSON.stringify(b)
-  } catch {
-    return false
-  }
+  return sameJson(a, b)
 }
 
 function show(value: unknown): string {
-  try {
-    const text = JSON.stringify(value)
-    return text === undefined ? String(value) : text.length > 60 ? text.slice(0, 59) + '…' : text
-  } catch {
-    return String(value)
-  }
+  if (value === undefined) return 'undefined'
+  const { text, cut } = jsonText(value, { maxLength: 60 })
+  return cut ? text.slice(0, 59) + '…' : text
 }
 
 /** enum, default and example against the schema's own types and enum. */

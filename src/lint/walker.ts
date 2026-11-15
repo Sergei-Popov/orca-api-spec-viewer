@@ -50,6 +50,8 @@ export interface WalkContext {
   /** `paramLike`: a Swagger 2.0 parameter or header, whose `required` is a boolean. */
   schemas: { value: unknown; path: string[]; paramLike?: boolean }[]
   root: Record<string, unknown>
+  /** Objects and arrays on the current path: a value that contains itself is walked once. */
+  active?: Set<object>
 }
 
 /** Numeric version levels so a field can say "since 3.1": Swagger 2.0 is 20, OpenAPI 3.0 is 30… */
@@ -92,6 +94,21 @@ function actualType(value: unknown): string {
 
 export function visit(value: unknown, type: FieldType, path: string[], ctx: WalkContext): void {
   if (type === 'any') return
+  if (value !== null && typeof value === 'object' && type !== 'schema') {
+    const active = (ctx.active ??= new Set())
+    if (active.has(value)) return
+    active.add(value)
+    try {
+      visitValue(value, type, path, ctx)
+    } finally {
+      active.delete(value)
+    }
+    return
+  }
+  visitValue(value, type, path, ctx)
+}
+
+function visitValue(value: unknown, type: FieldType, path: string[], ctx: WalkContext): void {
   if (type === 'schema') {
     ctx.schemas.push({ value, path })
     return
@@ -142,10 +159,21 @@ export function visit(value: unknown, type: FieldType, path: string[], ctx: Walk
     if (ignored.length > 0 && ctx.level < 100) ctx.problems.info('ref-siblings', path, { fields: ignored.join(', ') })
     return
   }
-  visitObject(value, type.obj, path, ctx)
+  visitFields(value, type.obj, path, ctx)
 }
 
 export function visitObject(value: Record<string, unknown>, name: string, path: string[], ctx: WalkContext): void {
+  const active = (ctx.active ??= new Set())
+  if (active.has(value)) return
+  active.add(value)
+  try {
+    visitFields(value, name, path, ctx)
+  } finally {
+    active.delete(value)
+  }
+}
+
+function visitFields(value: Record<string, unknown>, name: string, path: string[], ctx: WalkContext): void {
   const def = ctx.defs[name]
   if (!def) return
   for (const field of def.required ?? []) {
