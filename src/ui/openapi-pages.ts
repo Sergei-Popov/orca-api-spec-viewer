@@ -344,9 +344,9 @@ function paramTable(ctx: PageCtx, params: ParamView[], idBase: string): HTMLElem
       const desc = markdown(ctx, p.description)
       if (desc) cell.append(desc)
     }
-    for (const media of p.content) {
-      append(cell, h('div', { className: 'sub mono' }, media.type), media.schema ? schemaTree(ctx, media.schema.value, media.schema.loc, `${idBase}/${p.name}/${media.type}`) : null)
-      if (!p.hasExample && p.examples.length === 0) append(cell, exampleLine(ctx, media.examples))
+    for (const row of contentRows(p)) {
+      append(cell, h('div', { className: 'sub mono' }, row.type), row.schema ? schemaTree(ctx, row.schema.value, row.schema.loc, `${idBase}/${p.name}/${row.type}`) : null)
+      append(cell, exampleLine(ctx, row.example ? [row.example] : []))
     }
     if (p.hasExample) cell.append(h('div', { className: 'tvals' }, ctx.t.example + ':', h('code', null, valueToText(p.example).slice(0, 300))))
     else append(cell, exampleLine(ctx, p.examples))
@@ -355,9 +355,22 @@ function paramTable(ctx: PageCtx, params: ParamView[], idBase: string): HTMLElem
   return table
 }
 
+/**
+ * What a parameter's or header's `content` adds to its row: each media type, its schema, and the
+ * example to show when the row has none of its own.
+ */
+export function contentRows(row: { content: MediaView[]; hasExample: boolean; examples?: ExampleView[] }): { type: string; schema?: Located; example?: ExampleView }[] {
+  const given = row.hasExample || (row.examples?.length ?? 0) > 0
+  return row.content.map((media) => ({ type: media.type, schema: media.schema, example: given ? undefined : shownExample(media.examples) }))
+}
+
 /** The first example with something to show: 3.2's serialized form as written, or the value. */
+function shownExample(examples: ExampleView[]): ExampleView | undefined {
+  return examples.find((e) => e.serializedValue !== undefined || e.hasValue)
+}
+
 function exampleLine(ctx: PageCtx, examples: ExampleView[]): HTMLElement | null {
-  const ex = examples.find((e) => e.serializedValue !== undefined || e.hasValue)
+  const ex = shownExample(examples)
   if (!ex) return null
   const text = ex.serializedValue ?? valueToText(ex.value)
   return h('div', { className: 'tvals' }, ctx.t.example + ':', h('code', null, text.slice(0, 300)))
@@ -382,6 +395,11 @@ function headerTable(ctx: PageCtx, headers: HeaderView[], idBase: string): HTMLE
     } else {
       const desc = markdown(ctx, header.description)
       if (desc) cell.append(desc)
+    }
+    // A header defined with `content` (one media type) instead of a schema.
+    for (const row of contentRows(header)) {
+      append(cell, h('div', { className: 'sub mono' }, row.type), row.schema ? schemaTree(ctx, row.schema.value, row.schema.loc, `${idBase}/h:${header.name}/${row.type}`) : null)
+      append(cell, exampleLine(ctx, row.example ? [row.example] : []))
     }
     if (header.hasExample) cell.append(h('div', { className: 'tvals' }, ctx.t.example + ':', h('code', null, valueToText(header.example).slice(0, 300))))
     table.append(h('tr', null, nameCell, cell))
