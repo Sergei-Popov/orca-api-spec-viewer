@@ -1,6 +1,7 @@
 // The object tables of AsyncAPI 2.x and 3.x, Arazzo 1.x and Overlay 1.x.
 
-import { isObject, own } from '../spec/pointer'
+import { isObject, own, str } from '../spec/pointer'
+import { formatLevel } from './schema-rules'
 import { visit, type FieldType, type ObjectDef, type WalkContext } from './walker'
 
 const ref = (obj: string): FieldType => ({ obj, ref: true })
@@ -106,7 +107,7 @@ export function asyncApi2Defs(): Record<string, ObjectDef> {
       fields: {
         messageId: 'string',
         headers: 'schema',
-        payload: 'schema',
+        payload: 'any',
         correlationId: ref('CorrelationId'),
         schemaFormat: 'string',
         contentType: 'string',
@@ -119,6 +120,15 @@ export function asyncApi2Defs(): Record<string, ObjectDef> {
         bindings: 'any',
         examples: list(obj('MessageExample')),
         traits: list(ref('MessageTrait'))
+      },
+      check: (value, path, ctx) => {
+        // The payload is in the message's schemaFormat (AsyncAPI's own by default).
+        const payload = own(value, 'payload')
+        if (payload === undefined) return
+        const format = str(own(value, 'schemaFormat'))
+        const level = format === undefined ? ctx.level : formatLevel(format, ctx.level)
+        if (level !== null) ctx.schemas.push({ value: payload, path: [...path, 'payload'], level })
+        else if (isObject(payload) && typeof payload.$ref === 'string') ctx.refs.push({ ref: payload.$ref, path: [...path, 'payload', '$ref'] })
       }
     },
     MessageTrait: {
@@ -260,12 +270,9 @@ export function asyncApi3Defs(): Record<string, ObjectDef> {
       },
       check: (value, path, ctx) => {
         // A payload is a schema, or a multi-format object { schemaFormat, schema }.
+        // checkSchemas picks the rules by its schemaFormat.
         const payload = own(value, 'payload')
-        if (isObject(payload) && typeof payload.schemaFormat === 'string') {
-          if (/json|asyncapi/i.test(payload.schemaFormat)) ctx.schemas.push({ value: payload.schema, path: [...path, 'payload', 'schema'] })
-        } else if (payload !== undefined) {
-          ctx.schemas.push({ value: payload, path: [...path, 'payload'] })
-        }
+        if (payload !== undefined) ctx.schemas.push({ value: payload, path: [...path, 'payload'] })
       }
     },
     MessageTrait: {

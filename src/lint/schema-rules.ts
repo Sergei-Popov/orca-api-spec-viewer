@@ -45,17 +45,42 @@ const NOT_IN_SWAGGER2 = ['oneOf', 'anyOf', 'not', 'nullable', 'deprecated', 'wri
  * arrays, `const`, `prefixItems`).
  */
 function schemaLevel(ctx: WalkContext): number {
-  return ctx.family === 'arazzo1' || ctx.family === 'overlay1' ? 31 : ctx.level
+  return ctx.schemaLevel ?? (ctx.family === 'arazzo1' || ctx.family === 'overlay1' ? 31 : ctx.level)
+}
+
+/**
+ * The rules for an AsyncAPI schema in the given `schemaFormat`: the document's for AsyncAPI and
+ * JSON Schema, OpenAPI 3.0's for OpenAPI schemas, and none (null) for Avro, RAML, Protobuf and
+ * anything else, which are not JSON Schema at all.
+ */
+export function formatLevel(format: string, documentLevel: number): number | null {
+  const type = format.trim().toLowerCase()
+  if (/^application\/vnd\.aai\.asyncapi(?:\+json|\+yaml)?(?:;|$)/.test(type)) return documentLevel
+  if (/^application\/schema\+(?:json|yaml)(?:;|$)/.test(type)) return documentLevel
+  if (/^application\/vnd\.oai\.openapi(?:\+json|\+yaml)?(?:;|$)/.test(type)) return 30
+  return null
+}
+
+/** AsyncAPI 3's Multi Format Schema Object: `{ schemaFormat, schema }`. */
+function multiFormat(value: Record<string, unknown>, ctx: WalkContext): boolean {
+  return ctx.level === 300 && typeof value.schemaFormat === 'string' && Object.prototype.hasOwnProperty.call(value, 'schema')
 }
 
 export function checkSchemas(ctx: WalkContext): void {
   const seen = new WeakSet<object>()
-  const stack = ctx.schemas.map((s) => ({ value: s.value, path: s.path, depth: 0, paramLike: s.paramLike === true }))
+  const stack = ctx.schemas.map((s) => ({ value: s.value, path: s.path, depth: 0, paramLike: s.paramLike === true, level: s.level }))
   stack.reverse()
   let steps = 0
   while (stack.length > 0 && steps++ < 1_000_000) {
-    const { value, path, depth, paramLike } = stack.pop()!
+    const { value, path, depth, paramLike, level } = stack.pop()!
     if (value === undefined) continue
+    ctx.schemaLevel = level
+    if (isObject(value) && multiFormat(value, ctx)) {
+      const inner = formatLevel(value.schemaFormat as string, ctx.level)
+      if (inner !== null) stack.push({ value: value.schema, path: [...path, 'schema'], depth: depth + 1, paramLike: false, level: inner })
+      else if (isObject(value.schema) && typeof value.schema.$ref === 'string') ctx.refs.push({ ref: value.schema.$ref, path: [...path, 'schema', '$ref'] })
+      continue
+    }
     if (typeof value === 'boolean') {
       if (schemaLevel(ctx) < 31) ctx.problems.error('wrong-type', path, { expected: 'object', actual: 'boolean' })
       continue
@@ -67,8 +92,9 @@ export function checkSchemas(ctx: WalkContext): void {
     if (seen.has(value) || depth > 256) continue
     seen.add(value)
     const children = checkOne(value, path, ctx, paramLike)
-    for (let i = children.length - 1; i >= 0; i--) stack.push({ value: children[i].value, path: children[i].path, depth: depth + 1, paramLike: false })
+    for (let i = children.length - 1; i >= 0; i--) stack.push({ value: children[i].value, path: children[i].path, depth: depth + 1, paramLike: false, level })
   }
+  ctx.schemaLevel = undefined
 }
 
 interface Child {
@@ -279,7 +305,8 @@ function checkValues(schema: Record<string, unknown>, path: string[], ctx: WalkC
 
 function checkDiscriminator(schema: Record<string, unknown>, discriminator: unknown, path: string[], ctx: WalkContext): void {
   const at = [...path, 'discriminator']
-  if (schemaLevel(ctx) === 20) {
+  // Swagger 2.0 and AsyncAPI name the property with a string; OpenAPI 3 has a Discriminator Object.
+  if (schemaLevel(ctx) === 20 || schemaLevel(ctx) >= 100) {
     if (typeof discriminator !== 'string') ctx.problems.error('wrong-type', at, { expected: 'string', actual: typeof discriminator })
     return
   }

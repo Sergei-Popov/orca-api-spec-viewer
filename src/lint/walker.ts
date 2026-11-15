@@ -48,7 +48,9 @@ export interface WalkContext {
   refs: RefOccurrence[]
   /** Schemas to check with the schema rules, with where they are. */
   /** `paramLike`: a Swagger 2.0 parameter or header, whose `required` is a boolean. */
-  schemas: { value: unknown; path: string[]; paramLike?: boolean }[]
+  schemas: { value: unknown; path: string[]; paramLike?: boolean; level?: number }[]
+  /** While a schema is checked: the level of its rules when it is not the document's (see formatLevel). */
+  schemaLevel?: number
   /**
    * Parts no table describes, where a `$ref` still counts as a use of what it names: `x-…`
    * extensions (such as Redoc's `x-webhooks`) and AsyncAPI bindings.

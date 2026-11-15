@@ -76,3 +76,63 @@ components:
   // Including a schema used only from a binding in components.
   assert.deepEqual(found(asyncapi), [])
 })
+
+test('AsyncAPI payloads are checked by their schemaFormat; Avro and others are left alone', () => {
+  // Before: an Avro payload's `type: record` was "not allowed", in 2.6 always and in 3.0 for
+  // avro+json and avro+yaml; an OpenAPI-format payload got JSON Schema rules.
+  const v2 = `asyncapi: 2.6.0
+info: { title: T, version: '1.0.0' }
+channels:
+  users:
+    subscribe:
+      message:
+        schemaFormat: 'application/vnd.apache.avro;version=1.9.0'
+        payload: { type: record, name: User, fields: [{ name: id, type: long }] }
+  prices:
+    subscribe:
+      message:
+        schemaFormat: 'application/vnd.oai.openapi;version=3.0.0'
+        payload: { type: object, properties: { price: { type: number, minimum: 0, exclusiveMinimum: true }, note: { type: string, nullable: true } } }
+  plain:
+    subscribe:
+      message:
+        payload: { type: record }
+`
+  assert.deepEqual(found(v2), ['bad-value channels/plain/subscribe/message/payload/type'])
+  const v3 = (format: string, schema: string) => `asyncapi: 3.0.0
+info: { title: T, version: '1.0.0' }
+channels:
+  c: { address: c, messages: { M: { payload: { schemaFormat: '${format}', schema: ${schema} } } } }
+operations:
+  o: { action: receive, channel: { $ref: '#/channels/c' } }
+`
+  const record = '{ type: record, name: User, fields: [{ name: id, type: long }] }'
+  for (const format of ['application/vnd.apache.avro+json;version=1.9.0', 'application/vnd.apache.avro+yaml;version=1.9.0', 'application/vnd.apache.avro;version=1.9.0', 'application/raml+yaml;version=1.0', 'application/vnd.google.protobuf']) {
+    assert.deepEqual(found(v3(format, record)), [], format)
+  }
+  const openapi = '{ type: object, properties: { price: { type: number, minimum: 0, exclusiveMinimum: true } } }'
+  assert.deepEqual(found(v3('application/vnd.oai.openapi+json;version=3.0.0', openapi)), [])
+  // The same schema under JSON Schema rules does have a problem, and is still reported.
+  assert.deepEqual(found(v3('application/vnd.aai.asyncapi+json;version=3.0.0', openapi)), ['wrong-type channels/c/messages/M/payload/schema/properties/price/exclusiveMinimum'])
+  assert.deepEqual(found(v3('application/schema+yaml;version=draft-07', record)), ['bad-value channels/c/messages/M/payload/schema/type'])
+  // A skipped format's reference still counts: to a component, or as another file.
+  const external = analyze(v3('application/vnd.apache.avro+json;version=1.9.0', "{ $ref: 'https://example.com/user.avsc' }")).problems
+  assert.deepEqual(external.map((p) => p.rule), ['external-ref'])
+})
+
+test('an AsyncAPI discriminator is a property name', () => {
+  // Before: "Expected object, found string", as for OpenAPI's Discriminator Object.
+  const spec = (discriminator: string) => `asyncapi: 3.0.0
+info: { title: T, version: '1.0.0' }
+channels:
+  pets: { address: pets, messages: { Pet: { payload: { $ref: '#/components/schemas/Pet' } } } }
+operations:
+  onPet: { action: receive, channel: { $ref: '#/channels/pets' } }
+components:
+  schemas:
+    Pet: { type: object, discriminator: ${discriminator}, properties: { petType: { type: string } } }
+`
+  assert.deepEqual(found(spec('petType')), [])
+  assert.deepEqual(found(spec('{ propertyName: petType }')), ['wrong-type components/schemas/Pet/discriminator'])
+  assert.deepEqual(found(spec('petType').replace('asyncapi: 3.0.0', 'asyncapi: 2.6.0').replace(/channels:[\s\S]*?components:/, 'channels: {}\ncomponents:')), [])
+})
