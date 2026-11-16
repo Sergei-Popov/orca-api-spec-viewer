@@ -7,6 +7,15 @@ All notable changes to this plugin are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-16
+
+### Fixed
+
+- A title whose first sentence ends inside a closing quote or bracket, such as GitHub's
+  'see "About teams."' webhooks, no longer gets a stray "…".
+- An operation page no longer prints its summary a second time under the title when the title
+  only dropped Markdown marks or joined lines.
+
 ## [0.1.0] - 2026-11-15
 
 ### Added

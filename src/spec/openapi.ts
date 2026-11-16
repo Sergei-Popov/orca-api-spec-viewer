@@ -463,19 +463,33 @@ export function pathTemplateNames(route: string): string[] {
  * there. Text cut anywhere but at the end of a sentence ends with "…".
  */
 export function shortSummary(text: string | undefined): string {
-  if (!text) return ''
+  return summaryParts(text).title
+}
+
+/**
+ * The title for a summary, and whether making it left something out: a later paragraph, the
+ * rest of a long line, or a link's target. Joining lines and dropping `**` and backticks don't
+ * count, so a page doesn't print the same summary twice.
+ */
+export function summaryParts(text: string | undefined): { title: string; cut: boolean } {
+  if (!text) return { title: '', cut: false }
   const whole = text.trim()
   const paragraph = whole.split(/\r?\n[ \t]*\r?\n/)[0]
-  const line = paragraph
+  const joined = paragraph
     .split(/\r?\n/)
     .map((part) => part.trim())
     .join(' ')
-    .replace(/!?\[([^\]\n]*)\]\([^()\s]*\)/g, '$1')
-    .replace(/\*\*(\S(?:[^*\n]*\S)?)\*\*/g, '$1')
-    .replace(/`([^`\n]+)`/g, '$1')
-  if (line.length <= 120) return paragraph.length < whole.length && !/[.!?:…]$/.test(line) ? line + '…' : line
-  const sentence = /^(.{20,119}?[.!?])\s/.exec(line)
-  return sentence ? sentence[1] : line.slice(0, 119).trimEnd() + '…'
+  const unlinked = joined.replace(/!?\[([^\]\n]*)\]\([^()\s]*\)/g, '$1')
+  const line = unlinked.replace(/\*\*(\S(?:[^*\n]*\S)?)\*\*/g, '$1').replace(/`([^`\n]+)`/g, '$1')
+  const more = paragraph.length < whole.length
+  const linked = unlinked !== joined
+  if (line.length <= 120) {
+    // A sentence may end inside a closing quote or bracket: '…see "About teams."'.
+    const ended = /[.!?:…]["'\u201d\u2019)\]]*$/.test(line)
+    return { title: more && !ended ? line + '…' : line, cut: more || linked }
+  }
+  const sentence = /^(.{20,119}?[.!?]["'\u201d\u2019)\]]*)\s/.exec(line)
+  return { title: sentence ? sentence[1] : line.slice(0, 119).trimEnd() + '…', cut: true }
 }
 
 export function operationTitle(op: Operation): string {

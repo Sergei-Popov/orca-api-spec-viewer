@@ -4,7 +4,7 @@
   "execution": "sandboxed-ui",
   "id": "api-spec-viewer",
   "name": "API Spec Viewer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Browse OpenAPI 3.x, Swagger 2.0, AsyncAPI 2/3, Arazzo and Overlay files in Orca's tabs: operations, schemas, code samples, search and problems. Opens openapi.yaml and *.openapi.json by itself. Independent; not affiliated with the OpenAPI Initiative, SmartBear or the AsyncAPI Initiative.",
   "author": {
     "name": "Sergei Popov",
