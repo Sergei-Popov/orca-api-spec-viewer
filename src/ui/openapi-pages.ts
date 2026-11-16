@@ -4,7 +4,7 @@
 import { format } from '../i18n'
 import { familyLabel } from '../spec/detect'
 import { exampleFromSchema } from '../spec/example'
-import { operationServers, operationSecurity, requirementScheme, securitySchemes, shortSummary, type OpenApiModel, type Operation, type ServerInfo, type TagNode } from '../spec/openapi'
+import { operationServers, operationSecurity, requirementScheme, securitySchemes, shortSummary, summaryParts, type OpenApiModel, type Operation, type ServerInfo, type TagNode } from '../spec/openapi'
 import { compareStatus, examplesOf, mediaList, operationDetails, paramView, type BodyView, type ExampleView, type HeaderView, type LinkView, type Located, type MediaView, type OperationDetails, type ParamView, type ResponseView } from '../spec/operation'
 import { getAt, isObject, own, str, toPointer } from '../spec/pointer'
 import type { Loc } from '../spec/refs'
@@ -644,7 +644,7 @@ export function operationPage(ctx: PageCtx, model: OpenApiModel, op: Operation):
   else if (op.scope === 'callback') crumbs.append(chip(ctx.t.callbacks))
   for (const tag of op.tags) crumbs.append(clickable(chip(tag, model.badgeTags.has(tag) ? '' : 'tagchip'), () => ctx.go('tag:' + tag)))
   main.append(crumbs)
-  const title = shortSummary(op.summary)
+  const { title, cut } = summaryParts(op.summary)
   main.append(h('h1', { className: 'h' }, title || op.operationId || op.route))
   main.append(h('div', { className: 'oprow' }, methodBadgeFull(op.method.toUpperCase()), routeEl(op.route), copyButton(ctx, op.route, ctx.t.copyPath)))
   const meta: Child[] = []
@@ -654,8 +654,8 @@ export function operationPage(ctx: PageCtx, model: OpenApiModel, op: Operation):
   if (line) meta.push(clickable(h('a', { className: 'link' }, format(ctx.t.line, { n: line })), () => ctx.showLine(line)))
   if (meta.length) main.append(h('div', { className: 'meta' }, ...meta))
   if (op.deprecated) main.append(banner('warning', ctx.t.deprecated))
-  // A summary too long for the title is shown whole, as text.
-  if (title && title !== op.summary.trim()) append(main, markdown(ctx, op.summary))
+  // A summary the title had to shorten is shown whole, as text.
+  if (title && cut) append(main, markdown(ctx, op.summary))
   append(main, ...describe(ctx, op.op))
 
   const servers = operationServers(model, op)

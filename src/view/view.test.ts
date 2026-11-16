@@ -1,7 +1,7 @@
 import { assert, test } from 'orca/testing'
 import { analyze } from '../analyze'
 import { problemMessage, stringsFor } from '../i18n'
-import { flatTags, MAX_TAG_DEPTH, shortSummary, type OpenApiModel } from '../spec/openapi'
+import { flatTags, MAX_TAG_DEPTH, shortSummary, summaryParts, type OpenApiModel } from '../spec/openapi'
 import { ancestorsOf, defaultExpanded, flattenNav, navTree, pageFor, pageIndex, type NavLabels } from './nav'
 import { buildSearchIndex, search, searchCounted } from './search'
 
@@ -246,4 +246,22 @@ test('a long summary is cut to its first paragraph, sentence or 120 characters',
   assert.ok(shortSummary(words).endsWith('…'))
   assert.equal(shortSummary(`A sentence that ends here. ${words}`), 'A sentence that ends here.')
   assert.equal(shortSummary(undefined), '')
+})
+
+test('a sentence that ends inside a closing quote or bracket gets no "…"', () => {
+  assert.equal(shortSummary('Activity relating to teams. For more information, see "[About teams](u)."\n\nMore.'), 'Activity relating to teams. For more information, see "About teams."')
+  assert.equal(shortSummary('See the guide (about wikis.)\n\nMore.'), 'See the guide (about wikis.)')
+  assert.equal(shortSummary('Quoted \u201cend.\u201d\n\nMore.'), 'Quoted \u201cend.\u201d')
+  assert.equal(shortSummary('No end mark "here"\n\nMore.'), 'No end mark "here"…')
+  assert.equal(shortSummary(`He said "this ends here." ${'word '.repeat(40)}`), 'He said "this ends here."')
+})
+
+test('the summary is repeated under the title only when the title left something out', () => {
+  assert.equal(summaryParts('Cancels a run that is `in_progress`.').cut, false)
+  assert.equal(summaryParts('**Starting a new project?** Use it').cut, false)
+  assert.equal(summaryParts('Folded over\ntwo lines').cut, false)
+  assert.equal(summaryParts('First paragraph.\n\nSecond paragraph.').cut, true)
+  assert.equal(summaryParts('See [the guide](https://example.com) first').cut, true)
+  assert.equal(summaryParts('word '.repeat(40)).cut, true)
+  assert.deepEqual(summaryParts(undefined), { title: '', cut: false })
 })
